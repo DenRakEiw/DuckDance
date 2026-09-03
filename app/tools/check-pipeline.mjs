@@ -10,8 +10,9 @@
 
 import { synthRoutine, synthPose } from "../src/dance/synth.js";
 import { extractFeatures } from "../src/dance/features.js";
-import { retarget, calibrate, sampleTrack, CH, NUM_CH, LIMITS, TRACK_FPS } from "../src/dance/retarget.js";
+import { retarget, calibrate, sampleTrack, CH, NUM_CH, LIMITS, TRACK_FPS, TRACK_DT } from "../src/dance/retarget.js";
 import { detectMoves, OCCUPANCY } from "../src/dance/moves.js";
+import { retargetPhrased, phraseGrid } from "../src/dance/phrase.js";
 import { onsetEnvelope, estimateTempo, beatGrid, analyseBuffer } from "../src/dance/beat.js";
 
 let failures = 0;
@@ -202,6 +203,114 @@ ok("the routine yields moves", events.length > 0, `${events.length} events, ${re
     `${snapped.length}/${q.events.length} snapped`);
   const moved = snapped.filter((e) => Math.abs(e.t - e.tRaw) > 0.14 + 1e-6);
   ok("quantisation never moves a beat further than its window", moved.length === 0);
+}
+
+// ── Phrased retargeting ────────────────────────────────────────────────
+// The whole claim of this path is that it produces a command the duck can
+// perform without anything being discarded. That is a property, not a
+// preference, so it gets tested as one.
+{
+  const bpm = 125.7;
+  const fastFrames = synthRoutine({ duration: 20, fps: 30, bpm });
+  const ff = extractFeatures(fastFrames);
+  const beatList = [];
+  for (let t = 0; t < 20; t += 60 / bpm) beatList.push(t);
+  const ph = retargetPhrased(ff, {}, beatList);
+
+  ok("phrased track has the same shape as the direct one",
+    ph.n === ph.data.length / NUM_CH && ph.fps === TRACK_FPS && !!ph.calib);
+
+  // The defining property: never asks for more slew than the duck has.
+  const caps = { [CH.VX]: 0.02, [CH.VY]: 0.015, [CH.WZ]: 0.10,
+    [CH.NECK_PITCH]: 0.09, [CH.HEAD_PITCH]: 0.09,
+    [CH.HEAD_YAW]: 0.09, [CH.HEAD_ROLL]: 0.09 };
+  let worst = 0, worstCh = -1;
+  for (let i = 1; i < ph.n; i++) {
+    for (const c of Object.keys(caps).map(Number)) {
+      const d = Math.abs(ph.data[i * NUM_CH + c] - ph.data[(i - 1) * NUM_CH + c]) / caps[c];
+      if (d > worst) { worst = d; worstCh = c; }
+    }
+  }
+  ok("phrased output never exceeds the duck's slew limits", worst <= 1.001,
+    `worst ${worst.toFixed(3)}x on channel ${worstCh}`);
+
+  const direct = retarget(ff);
+  ok("the direct path on the same clip does not fit", direct.fit.demand > 1.2,
+    `${direct.fit.demand.toFixed(2)}x, ${(direct.fit.clippedFraction * 100).toFixed(0)}% of steps clipped`);
+
+  // Every channel must still carry the dance. A track that fits by being
+  // silent would pass the check above.
+  const rng = (t, c) => {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < t.n; i++) {
+      const v = t.data[i * NUM_CH + c];
+      if (v < lo) lo = v; if (v > hi) hi = v;
+    }
+    return hi - lo;
+  };
+  ok("phrased body still turns", rng(ph, CH.WZ) > 0.3, `wz range ${rng(ph, CH.WZ).toFixed(2)}`);
+  ok("phrased head still moves on all three axes",
+    rng(ph, CH.HEAD_YAW) > 0.2 && rng(ph, CH.HEAD_PITCH) > 0.2 && rng(ph, CH.HEAD_ROLL) > 0.2,
+    `yaw ${rng(ph, CH.HEAD_YAW).toFixed(2)}, nod ${rng(ph, CH.HEAD_PITCH).toFixed(2)}, roll ${rng(ph, CH.HEAD_ROLL).toFixed(2)}`);
+
+  // The head must keep the dancer's rhythm, not the phrase's. Counting
+  // direction changes is a blunt proxy but it is exactly the thing that
+  // broke when the head was bound to the phrase grid.
+  const turns = (t, c) => {
+    let k = 0;
+    for (let i = 1; i < t.n; i++) {
+      const a = t.data[(i - 1) * NUM_CH + c], b = t.data[i * NUM_CH + c];
+      if ((a < 0) !== (b < 0)) k++;
+    }
+    return k;
+  };
+  ok("the head keeps the dancer's rhythm rather than the phrase's",
+    turns(ph, CH.HEAD_YAW) >= turns(direct, CH.HEAD_YAW) * 0.7,
+    `${turns(ph, CH.HEAD_YAW)} direction changes vs ${turns(direct, CH.HEAD_YAW)} direct`);
+
+  // The body should be calmer than the direct path: that is the point.
+  ok("the body is calmer than frame-by-frame",
+    turns(ph, CH.VX) < turns(direct, CH.VX),
+    `${turns(ph, CH.VX)} vs ${turns(direct, CH.VX)} changes of direction`);
+
+  // A dancer stepping on the spot must not march the duck into the wall.
+  let sum = 0;
+  for (let i = 0; i < ph.n; i++) sum += ph.data[i * NUM_CH + CH.VX] * TRACK_DT;
+  ok("stepping on the spot does not walk the duck away",
+    Math.abs(sum) < 0.6, `net travel ${sum.toFixed(2)} m over ${ph.duration.toFixed(0)} s`);
+
+  // Grid choice.
+  const g = phraseGrid(beatList, 20);
+  ok("phrases are whole beats long enough to perform",
+    g.perPhrase >= 2 && g.source === "beats", `${g.perPhrase} beats per phrase`);
+  const g2 = phraseGrid([], 20);
+  ok("a clip with no beat still gets a grid", g2.edges.length > 2 && g2.source === "fixed");
+
+  const stillFrames = [];
+  for (let i = 0; i < 200; i++) stillFrames.push({ t: i / 30, ...synthPose() });
+  const stillPh = retargetPhrased(extractFeatures(stillFrames), {}, []);
+  let maxAbs = 0;
+  for (let i = 0; i < stillPh.data.length; i++) maxAbs = Math.max(maxAbs, Math.abs(stillPh.data[i]));
+  ok("a motionless dancer leaves the phrased duck still too", maxAbs < 0.05,
+    `max |cmd| ${maxAbs.toFixed(3)}`);
+}
+
+// ── Move budget ────────────────────────────────────────────────────────
+{
+  const f2 = extractFeatures(synthRoutine({ duration: 24, fps: 30, bpm: 125.7 }));
+  const r = detectMoves(f2, calibrate(f2), {}, []);
+  ok("kicks are detected on a busy dancer",
+    r.events.some((e) => e.type.startsWith("kick")),
+    r.events.map((e) => e.type).join(", ") || "none");
+  ok("skills stay inside the time budget",
+    r.debug.occupancy <= 0.31,
+    `${(r.debug.occupancy * 100).toFixed(0)}% of the routine occupied`);
+
+  // A squat has to be priced together with the stand that ends it, or a
+  // pair of them looks cheaper than it is.
+  const sits = r.events.filter((e) => e.type === "sit").length;
+  const stands = r.events.filter((e) => e.type === "stand").length;
+  ok("every sit has its stand", sits === stands, `${sits} sits, ${stands} stands`);
 }
 
 // ── Beat analysis ──────────────────────────────────────────────────────

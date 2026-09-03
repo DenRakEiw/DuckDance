@@ -11,6 +11,7 @@ import { create } from "zustand";
 import { createLandmarker, loadVideo, captureFrames } from "./capture.js";
 import { extractFeatures } from "./features.js";
 import { retarget, calibrate, DEFAULT_TUNING } from "./retarget.js";
+import { retargetPhrased, DEFAULT_PHRASE_TUNING } from "./phrase.js";
 import { detectMoves, DEFAULT_MOVE_TUNING } from "./moves.js";
 import { decodeAudio, analyseBuffer } from "./beat.js";
 import { DEFAULT_PLAYBACK } from "./player.js";
@@ -46,7 +47,10 @@ export const useDance = create(() => ({
   captureInfo: null,
 
   // Controls
-  tuning: { ...DEFAULT_TUNING },
+  // One tuning object serves both retargeting paths: the gains, the
+  // mirror and the head polarities mean the same thing in each, so
+  // switching mode keeps whatever the user has dialled in.
+  tuning: { ...DEFAULT_TUNING, ...DEFAULT_PHRASE_TUNING, mode: "phrase" },
   moveTuning: { ...DEFAULT_MOVE_TUNING },
   playback: { ...DEFAULT_PLAYBACK },
   captureOpts: { model: "full", targetFps: 30, maxDuration: 90, mode: "auto" },
@@ -76,7 +80,13 @@ let abortCtl = null;
 export function rebuild() {
   const { features, tuning, moveTuning, beats } = get();
   if (!features) return;
-  const track = retarget(features, tuning);
+  // "phrase" builds a command the duck can perform; "direct" maps every
+  // frame and lets the slew limiter sort it out. Direct is kept because
+  // it is the honest baseline and, on a slow clip, the more faithful of
+  // the two.
+  const track = tuning.mode === "direct"
+    ? retarget(features, tuning)
+    : retargetPhrased(features, tuning, beats);
   const calib = track.calib;
   const { events, rejected } = detectMoves(features, calib, moveTuning, beats);
   set({ track, calib, events, rejected });

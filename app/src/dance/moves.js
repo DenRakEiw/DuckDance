@@ -32,8 +32,22 @@ export const DEFAULT_MOVE_TUNING = {
   sensitivity: 1.0,    // scales every threshold, higher = more moves
   quantise: true,      // snap to the nearest beat
   quantiseWindow: 0.14, // seconds a move may be nudged to hit a beat
-  minSpacing: 0.9,     // seconds between any two moves
+  // Seconds between any two moves. A kick already occupies the duck for
+  // 1.1 s; going straight into the next one gave it no time to get its
+  // gait back, and a routine kicking every 2.9 s put it on the floor
+  // twice in nine seconds.
+  minSpacing: 1.8,
   mirror: false,
+  // Share of the routine the duck may spend performing skills rather
+  // than dancing. Everything a skill does freezes the twist, so this is
+  // the difference between a routine with accents in it and a routine
+  // that is mostly the duck getting into and out of poses.
+  occupancyBudget: 0.2,
+  leadIn: 1.0,         // seconds at the start where no skill is scheduled
+  // How much each skill is worth, before its cost is taken into account.
+  // A kick reads instantly and is cheap; a squat is legible but slow;
+  // a bow is somewhere between.
+  moveValue: { kickL: 1.0, kickR: 1.0, pick: 0.8, sit: 0.7, roll: 0.6 },
 };
 
 // How long the duck is unavailable after each skill starts, in seconds.
@@ -107,6 +121,7 @@ export function detectMoves(f, calib, tuning = {}, beats = []) {
   const candidates = [];
   const debug = {};
 
+  const duration = f.n > 1 ? Math.max(1e-3, t[f.n - 1] - t[0]) : 1;
   const srcDt = f.n > 1 ? Math.max(1e-3, (t[f.n - 1] - t[0]) / (f.n - 1)) : 0.033;
   const win = Math.max(3, Math.round(0.09 / srcDt) | 1);
 
@@ -123,12 +138,18 @@ export function detectMoves(f, calib, tuning = {}, beats = []) {
       relL[i] = liftL[i] - calib.footLiftL;
       relR[i] = liftR[i] - calib.footLiftR;
     }
-    const spread = Math.max(
-      0.12,
-      (percentile(Array.from(relL), 0.92) + percentile(Array.from(relR), 0.92)) / 2,
-    );
-    const hi = spread * 1.35 / sens;
-    const lo = hi * 0.45;
+    // The threshold has to sit INSIDE the dancer's range, not above it.
+    // Taking a high percentile and multiplying by 1.35 put it above
+    // everything the dancer ever did: on a real clip the feet were busy
+    // throughout, the 92nd percentile was already high, and not a single
+    // kick fired all song. Anchoring it partway between the typical lift
+    // and the biggest one guarantees the biggest lifts clear it while
+    // ordinary stepping does not.
+    const all = [...relL, ...relR];
+    const mid = percentile(all, 0.5);
+    const top = percentile(all, 0.97);
+    const hi = Math.max(0.1, mid + (top - mid) * (0.62 / sens));
+    const lo = mid + (hi - mid) * 0.4;
     debug.kickThreshold = hi;
     for (const e of risingEdges(relL, t, hi, lo)) {
       candidates.push({ t: e.t, type: T.mirror ? "kickR" : "kickL",
@@ -165,9 +186,15 @@ export function detectMoves(f, calib, tuning = {}, beats = []) {
     for (let i = 0; i < f.n; i++) drop[i] = (calib.stanceTall - st[i]) / span;
     const hi = 0.62 / sens;
     debug.sitThreshold = hi;
+    // A sit is offered as ONE candidate carrying its own stand, because
+    // that is how it is actually paid for. Scheduling the two separately
+    // let a squat and its recovery be priced as two cheap moves when
+    // together they occupy the duck for as long as four kicks.
     for (const [t0, t1] of sustainedSpans(drop, t, hi, hi * 0.6, 1.1)) {
-      candidates.push({ t: t0, type: "sit", strength: 1, rule: "held squat" });
-      candidates.push({ t: t1, type: "stand", strength: 1, rule: "rise from squat" });
+      candidates.push({
+        t: t0, type: "sit", strength: 1, rule: "held squat",
+        pairedStand: Math.max(t0 + OCCUPANCY.sit + 0.6, t1),
+      });
     }
   }
 
@@ -210,40 +237,65 @@ export function detectMoves(f, calib, tuning = {}, beats = []) {
   }
 
   // ── Scheduling ──
-  // Sort by time, then walk forward keeping only what the duck is
-  // actually free to perform. Everything dropped is reported, because a
-  // silent filter here looks like broken detection.
+  //
+  // The duck has a fixed amount of time it can spend NOT dancing, and
+  // every skill spends some of it. The old scheduler simply walked the
+  // candidates in time order and took whatever fitted, which on a real
+  // clip meant six squats ate half the song and no kick ever got a turn.
+  //
+  // So candidates now compete on value per occupied second, and the
+  // routine has an explicit budget. A kick is short and legible and wins
+  // easily; a squat carries its own stand and is priced for both, which
+  // is what pushes it down the list to where it belongs.
   candidates.sort((a, b) => a.t - b.t);
-  const events = [];
+  const budget = Math.max(OCCUPANCY.kickL, duration * T.occupancyBudget);
+  const priced = candidates.map((c) => {
+    const cost = c.type === "sit"
+      ? (c.pairedStand - c.t) + OCCUPANCY.stand
+      : (OCCUPANCY[c.type] ?? 1);
+    const weight = T.moveValue[c.type] ?? 1;
+    return { ...c, cost, value: weight * Math.min(2, Math.max(0.4, c.strength)) };
+  });
+
+  const taken = [];
   const rejected = [];
-  let busyUntil = -Infinity;
-  let sitting = false;
+  let spent = 0;
+  // Best value density first; ties broken by time so the result is
+  // deterministic rather than dependent on sort stability.
+  const order = [...priced].sort((a, b) =>
+    (b.value / b.cost) - (a.value / a.cost) || a.t - b.t);
 
-  for (const c of candidates) {
-    // Standing is only meaningful while sitting, and sitting twice in a
-    // row is not a thing.
-    if (c.type === "stand" && !sitting) { rejected.push({ ...c, why: "not sitting" }); continue; }
-    if (c.type === "sit" && sitting) { rejected.push({ ...c, why: "already sitting" }); continue; }
-    // While the duck is sitting the only skill that means anything is
-    // standing back up.
-    if (sitting && c.type !== "stand") { rejected.push({ ...c, why: "sitting" }); continue; }
-    if (c.t < busyUntil) { rejected.push({ ...c, why: "duck busy" }); continue; }
-    if (events.length && c.t - events[events.length - 1].t < T.minSpacing) {
-      rejected.push({ ...c, why: "too close to previous" });
-      continue;
+  const busySpans = [];
+  const overlaps = (t0, t1) =>
+    busySpans.some(([a, b]) => t0 < b + T.minSpacing && a - T.minSpacing < t1);
+
+  for (const c of order) {
+    // The duck needs a moment on its feet before it is asked to stand on
+    // one of them. A move scheduled at the very top of the clip fires
+    // while the gait policy is still settling, and it goes over.
+    if (c.t < T.leadIn) { rejected.push({ ...c, why: "too early in the clip" }); continue; }
+    const end = c.type === "sit" ? c.pairedStand + OCCUPANCY.stand : c.t + c.cost;
+    if (spent + c.cost > budget) { rejected.push({ ...c, why: "no time left in the routine" }); continue; }
+    if (overlaps(c.t, end)) { rejected.push({ ...c, why: "duck busy" }); continue; }
+    busySpans.push([c.t, end]);
+    spent += c.cost;
+    taken.push(c);
+  }
+
+  taken.sort((a, b) => a.t - b.t);
+  const events = [];
+  for (const c of taken) {
+    if (c.type === "sit") {
+      events.push({ ...c, type: "sit" });
+      events.push({ t: c.pairedStand, type: "stand", strength: 1,
+        rule: "rise from squat", quantised: c.quantised });
+    } else {
+      events.push(c);
     }
-    events.push(c);
-    busyUntil = c.t + (OCCUPANCY[c.type] ?? 1);
-    if (c.type === "sit") sitting = true;
-    if (c.type === "stand") sitting = false;
   }
-
-  // A routine that ends mid-squat would leave the duck sitting for good.
-  if (sitting && events.length) {
-    const last = events[events.length - 1];
-    events.push({ t: last.t + OCCUPANCY.sit + 0.4, type: "stand", strength: 1,
-      rule: "auto stand at end" });
-  }
+  debug.budget = budget;
+  debug.spent = spent;
+  debug.occupancy = duration > 0 ? spent / duration : 0;
 
   return { events, rejected, debug };
 }

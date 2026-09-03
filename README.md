@@ -31,6 +31,33 @@ On top of that, moments a gait cannot express are matched to the one-shot
 skills the sandbox already ships, and scheduled around how long each one
 occupies the duck.
 
+### Two ways to write that command
+
+**Frame by frame** maps every video frame to a command and lets the duck's
+rate limiter discard what it cannot follow. It is faithful on a slow clip
+and mush on a fast one: on a 125 BPM phone clip the limiter was holding a
+channel back on 92% of control steps.
+
+**Phrased**, the default, inverts the problem. Instead of filtering a
+signal that is too fast, it builds one that fits by construction.
+
+- The dancer's motion is summarised over a span of whole beats long enough
+  for the duck to complete a gesture in, about a second. Each phrase gets
+  one target per channel: the net rotation the dancer actually turned
+  through, where they travelled. The duck performs that, once, properly.
+- Transitions are smoothsteps, whose peak slope is a known 1.5 times the
+  average. That is a budget, so when a gesture will not fit, the target
+  shrinks and the duck performs a smaller COMPLETE movement rather than
+  starting a large one and being cut off.
+- The head is not phrased. A full head swing takes 0.4 s against a phrase
+  of nearly a second, so it follows the dancer's own rhythm, smoothed only
+  as far as needed and then scaled to the largest amplitude that fits.
+
+Measured on the same clip: the phrased track sits exactly on the duck's
+slew limits with nothing discarded, the body changes direction 13 times
+where the direct path changed 89, and the head keeps 41 of the direct
+path's 42 direction changes.
+
 ```
 video ──► MediaPipe pose ──► features ──► retarget ──► 50 Hz command track ──┐
                                  │                                            ├──► the duck
@@ -45,7 +72,8 @@ audio ──► onset envelope ──► tempo ──► beats ─┘
 | --- | --- |
 | `capture.js` | Runs the pose tracker over the video, by playback or frame stepping |
 | `features.js` | Landmarks to a body basis, head angles, limb and posture signals |
-| `retarget.js` | Signals to the 50 Hz command track, calibrated per dancer |
+| `retarget.js` | Signals to a 50 Hz command track, frame by frame |
+| `phrase.js` | The same, built at a tempo the duck can actually hold |
 | `moves.js` | Kicks, bow, sit and stand, scheduled around the duck's availability |
 | `beat.js` | Spectral flux onsets, tempo, and a beat grid to snap moves to |
 | `player.js` | Video time in, duck commands out |
@@ -94,11 +122,12 @@ through the sandbox's own skills and being correctly refused while the
 duck is busy, tempo recovered from a real MP4 to within 0.1%, and a clip
 with no dancer failing cleanly.
 
-**The duck still falls over sometimes**, roughly once a minute on the
-built-in routine, usually on a hard turn. The sandbox's fall-recovery
-policy gets it back up on its own and the routine carries on, with
-commands held at zero in the meantime. Turning the sensitivity or the
-turn gain down makes it rarer.
+**The duck still falls over sometimes**, about three times across the 24 s
+built-in routine, usually around a kick. The sandbox's own kicks are
+described upstream as blind one-shot boots, so asking for one mid-dance is
+inherently a gamble. Fall recovery gets the duck back up on its own and
+the routine carries on, with commands held at zero in the meantime.
+Turning kicks off in the Moves panel makes the routine stable.
 
 Tracking on real footage turned out fine: a 44 s phone clip of one dancer
 came back 100% tracked with the tempo read at 125.7 BPM. What that clip

@@ -325,8 +325,28 @@ export default function DanceLab() {
 
       {/* ── Speed ──────────────────────────────────────────────────── */}
       {ready && s.track?.fit && (
-        <Panel title="3. Speed" accent={COMIC_YELLOW}
-          right={`duck needs ${s.track.fit.demand.toFixed(1)}x longer`}>
+        <Panel title="3. Speed and phrasing" accent={COMIC_YELLOW}
+          right={s.track.mode === "phrase"
+            ? `${s.track.phrases?.length ?? 0} phrases`
+            : `duck needs ${s.track.fit.demand.toFixed(1)}x longer`}>
+          <Row gap={0.6}>
+            {[["phrase", "Phrased"], ["direct", "Frame by frame"]].map(([m, label]) => (
+              <Box key={m} onClick={() => setTuning({ mode: m })}
+                sx={{ cursor: "pointer", fontFamily: MONO, fontSize: "0.62rem",
+                  px: 1, py: 0.35,
+                  border: `2px solid ${s.tuning.mode === m ? ACID_CYAN : "rgba(255,255,255,0.22)"}`,
+                  color: s.tuning.mode === m ? COMIC_INK : "rgba(255,255,255,0.72)",
+                  background: s.tuning.mode === m ? ACID_CYAN : "transparent" }}>
+                {label}
+              </Box>
+            ))}
+          </Row>
+          <Note>
+            {s.tuning.mode === "phrase"
+              ? `Phrased: the body commits to one gesture per ${s.track.fit.beatsPerPhrase ?? 2} beats, which the duck can actually finish, while the head keeps following the dancer's own rhythm at whatever amplitude fits.`
+              : "Frame by frame: every video frame becomes a command and the duck's rate limiter discards whatever it cannot follow. Faithful on a slow clip, mush on a fast one."}
+          </Note>
+          <Box sx={{ mt: 1.2 }} />
           <Row gap={0.6}>
             {[1, 0.75, 0.5, 0.35].map((r) => (
               <Box key={r} onClick={() => setPlayback({ rate: r })}
@@ -343,7 +363,13 @@ export default function DanceLab() {
               Fit to the duck
             </ComicButton>
           </Row>
-          {s.track.fit.demand > 1.15 ? (
+          {s.tuning.mode === "phrase" ? (
+            <Note>
+              Built to fit: the command sits exactly on the duck's limits
+              and nothing is discarded, so full speed works. Slowing down
+              still makes the gestures bigger and easier to read.
+            </Note>
+          ) : s.track.fit.demand > 1.15 ? (
             <Note tone={s.playback.rate <= s.track.fit.recommendedRate ? "dim" : "warn"}>
               This dancer moves about {s.track.fit.demand.toFixed(1)} times faster
               than the duck can follow, worst on {s.track.fit.limitedBy}. A command
