@@ -54,7 +54,8 @@ cd F:\Duck\app && npm run build
 
 `.claude/launch.json` defines a `duckdance` preview server on port 5173.
 
-`?boot=1` skips the title card. `?ghosts=1` re-enables pose broadcasting.
+`?boot=1` skips the title card. `?ghosts=1` re-enables pose broadcasting,
+`?ball=1` re-enables the kickable ball.
 Debug handles in the console: `window.rl` (sim internals, upstream),
 `window.__store` (sim UI state, upstream), `window.__gameApi` (upstream +
 our `dance` surface), `window.__danceStore` (ours).
@@ -69,7 +70,8 @@ from the Space if you need to diff).
 Upstream code we touched, and only this:
 
 - `src/game/game.js` — registers a `DanceSource` ahead of the other input
-  sources, adds `gameApi.dance`, and gates the multiplayer ghosts.
+  sources, adds `gameApi.dance`, and gates the multiplayer ghosts and the
+  kickable ball.
 - `src/ui/TitleMenu.jsx` — `closeMenu` exported so the play button can
   walk the duck in.
 - `src/main.jsx` — renders `DuckDanceApp` instead of `App`.
@@ -224,6 +226,15 @@ priced together with the stand that ends it.
   translucent ducks over public Nostr relays. There the broadcast pose is
   someone using arrow keys; here it is derived from a video the user chose
   off their own machine, and the app promises it stays local. `?ghosts=1`.
+- **The ball stays parked.** Upstream's ball is the point of the sandbox:
+  you drive the duck at it and boot it around. In a routine it only reads
+  as choreography going wrong — trodden on, kicked off-beat, pulling the
+  eye off the dance. One gate inside `spawnBall()` covers every caller
+  (entrance hand-off, escape watchdog, queued respawn, controller action,
+  API), so nothing can put one back. It is parked, not deleted: the body
+  stays in the model because the keyframe layout counts on its 7
+  free-joint values. The kick policies never read its position anyway.
+  `?ball=1`.
 - **Clips below 15% tracked are rejected**, not turned into a routine
   built on noise.
 - **Local MediaPipe.** wasm and both `.task` models are vendored under

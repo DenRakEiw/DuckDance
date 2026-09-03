@@ -417,6 +417,19 @@ async function boot({ scene, camera, renderer }) {
   // Local-only kickable ball: false while parked at the keyframe spot
   // (mesh hidden), true once popped in front of the duck.
   let ballActive = false;
+  // DuckDance leaves the ball parked, another deliberate departure from
+  // the upstream sandbox. There the ball is the point: you drive the duck
+  // at it and boot it around. Here the duck is performing a routine, and
+  // a ball underfoot only shows up as choreography going wrong - it gets
+  // trodden on, kicked off-beat, and drags the eye away from the dance.
+  // The kicks in a routine are blind one-shot boots that never read the
+  // ball's position anyway (see constants.js), so they lose nothing.
+  //
+  // Parked, not removed: the body stays in the model because the keyframe
+  // layout counts on its 7 free-joint values (see the qpos comment where
+  // the arena is built), and its mesh is created hidden. Opt back in with
+  // ?ball=1.
+  const ballWanted = new URLSearchParams(location.search).get("ball") === "1";
 
   // The twist the policy actually receives. Mid-roll every movement input
   // is ignored (zero twist) until the roll hands back to walk on its own.
@@ -569,6 +582,9 @@ async function boot({ scene, camera, renderer }) {
   // peel it away first (reverse scan) and pop the new one when that
   // finishes - same appear/disappear pair as the duck's wireframe ceremony.
   function spawnBall(opts = {}) {
+    // One gate for every caller: the entrance hand-off, the escape
+    // watchdog, the queued respawn, the controller action and the API.
+    if (!ballWanted) return;
     if (inputLocked && !opts.fromQueue) return;
     if (!ball) return;
     if (ball.visual !== "hidden") {
@@ -1902,6 +1918,7 @@ async function boot({ scene, camera, renderer }) {
   const ghostsWanted = new URLSearchParams(location.search).get("ghosts") === "1";
   const r3 = (x) => Math.round(x * 1000) / 1000;
   if (!ghostsWanted) bootNote("> ghosts off (dance mode) - add ?ghosts=1 to enable");
+  if (!ballWanted) bootNote("> ball parked (dance mode) - add ?ball=1 to enable");
   try {
     if (!ghostsWanted) return;
     // Ghosts only join once the entrance has fully played: the world (and
