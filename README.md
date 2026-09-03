@@ -1,8 +1,11 @@
 # DuckDance
 
-Upload a dance video on the left, watch a Microduck dance to it on the right.
+Drop in a song and a Microduck robot choreographs itself to it. Drop in a
+dance video instead and it copies the person in it.
 
-Everything runs in the browser. The video is read from disk, tracked, and
+![The duck dancing to a song, with the analysis panel on the left](docs/demo.gif)
+
+Everything runs in the browser. The file is read from disk, analysed and
 turned into robot commands locally; nothing is uploaded anywhere.
 
 Built on [Pollen Robotics' Microduck sandbox](https://huggingface.co/spaces/pollen-robotics/microduck-simulator),
@@ -31,7 +34,7 @@ On top of that, moments a gait cannot express are matched to the one-shot
 skills the sandbox already ships, and scheduled around how long each one
 occupies the duck.
 
-### Two ways to write that command
+### Three ways to write that command
 
 **Frame by frame** maps every video frame to a command and lets the duck's
 rate limiter discard what it cannot follow. It is faithful on a slow clip
@@ -58,12 +61,42 @@ slew limits with nothing discarded, the body changes direction 13 times
 where the direct path changed 89, and the head keeps 41 of the direct
 path's 42 direction changes.
 
+**From the music** needs no dancer at all, and is what a song on its own
+gets. The argument for it is the same arithmetic taken one step further:
+whatever goes in, the duck manages about one gesture per beat, so a whole
+song comes down to a few hundred numbers. A dancer is an expensive way to
+produce a few hundred numbers, and every one of them arrives blurred by
+tracking noise.
+
+- Figures are written onto a **bar** grid, so they begin on the one. The
+  downbeat is found by scoring each candidate phase against how hard the
+  beats falling on it are hit.
+- A **motif** of two or four bars repeats through a section and is replaced
+  at the section boundary, with a busier fill every second repeat. That one
+  rule is what separates choreography from a random walk: an audience reads
+  a repeated figure as intent. Section boundaries come from a novelty curve
+  over per-bar band energy, snapped to four-bar multiples because that is
+  where songs actually change.
+- Targets are checked against the same slew budget, so the result fits by
+  construction with nothing discarded.
+
+The figure library is one small table with an `energy` and a `travel` flag
+per entry. It is the only part where taste rather than arithmetic decides,
+which makes it the part worth rewriting.
+
+Two measured facts shape that library, and they were not obvious. The gait
+has a **threshold**: below about 0.20 m/s forward the policy plants both
+feet and leans instead of stepping. And **sideways it never steps at all**,
+at any speed the policy allows. So a quiet section asking for 65% of full
+size does not get smaller steps, it gets none - which is exactly what an
+earlier version did for a whole song, while its head wobbled away.
+
 ```
-video ──► MediaPipe pose ──► features ──► retarget ──► 50 Hz command track ──┐
-                                 │                                            ├──► the duck
-                                 └──────► moves ──► scheduled skills ─────────┘
-                                              ▲
-audio ──► onset envelope ──► tempo ──► beats ─┘
+video ──► MediaPipe pose ──► features ──► retarget | phrase ──┐
+                                 │                             │
+                                 └──────► moves ──► skills ────┤──► 50 Hz track ──► the duck
+                                                               │
+audio ──► onsets ──► tempo, bars, sections ──► choreograph ────┘
 ```
 
 ### The pieces
@@ -74,8 +107,10 @@ audio ──► onset envelope ──► tempo ──► beats ─┘
 | `features.js` | Landmarks to a body basis, head angles, limb and posture signals |
 | `retarget.js` | Signals to a 50 Hz command track, frame by frame |
 | `phrase.js` | The same, built at a tempo the duck can actually hold |
+| `choreograph.js` | Figures written onto the bar grid, from music alone |
 | `moves.js` | Kicks, bow, sit and stand, scheduled around the duck's availability |
-| `beat.js` | Spectral flux onsets, tempo, and a beat grid to snap moves to |
+| `beat.js` | Onsets, tempo, beat grid, downbeat, bars, sections, band energy |
+| `stamp.js` | Strictly rising tracker timestamps, per model rather than per clip |
 | `player.js` | Video time in, duck commands out |
 | `DanceSource.js` | Presents all of that to the sandbox as one more input device |
 
@@ -89,9 +124,10 @@ upstream code.
 cd app && npm install && npm run dev
 ```
 
-Then open http://localhost:5173. Press play with no clip loaded and the
+Then open http://localhost:5173. Press play with nothing loaded and the
 built-in synthetic routine drives the duck, so you can see the whole chain
-work before finding a video.
+work before finding a file. Any MP3 or WAV works from there; a video only
+matters if you want the duck to copy a particular person.
 
 ```bash
 npm test
@@ -100,7 +136,7 @@ npm test
 Checks the retargeting maths end to end with a synthetic dancer, and the
 beat analyser against a synthetic click track. No browser needed.
 
-## Two decisions worth knowing about
+## Three decisions worth knowing about
 
 **Pose broadcasting is off.** The upstream Space shows other visitors as
 translucent ducks, over public relays. There the broadcast pose is whatever
@@ -109,10 +145,18 @@ user picked off their own machine, and this app promises that video stays
 local. Streaming the choreography read off it to strangers would make that
 promise only technically true. Add `?ghosts=1` to turn it back on.
 
-**Clips with no dancer are rejected.** Below 15% of frames tracked the app
-refuses the clip rather than building a routine out of stray detections.
-An earlier version happily produced one, and the duck spent the whole song
-holding a contorted head pose derived from two junk frames.
+**Clips with no dancer fall back to the music.** Below 15% of frames
+tracked, the app will not build a routine out of stray detections - an
+earlier version happily did, and the duck spent the whole song holding a
+contorted head pose derived from two junk frames. If there is a beat in the
+file it is choreographed from that instead, and the app says so.
+
+**Kicks are off in the music path.** The sandbox's kicks are blind one-shot
+boots that take no account of the gait they interrupt. Measured on a 40 s
+routine: the duck went down 0.2 s after the first kick, and again at every
+kick after it. The same routine without them ran the full 40 s with the
+trunk never leaving upright. They are one toggle away for anyone who wants
+them.
 
 ## What works and what does not
 
