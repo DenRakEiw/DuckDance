@@ -29,6 +29,7 @@
 import { sampleTrack, NUM_CH, CH, TRACK_DT } from "./retarget.js";
 
 export const DEFAULT_PLAYBACK = {
+  rate: 1,          // playback speed; below 1 gives the duck time to follow
   leadTime: 0.12,   // fire a move this far before its timestamp
   headScale: 1.0,   // final trim on the head channels
   twistScale: 1.0,  // final trim on the twist channels
@@ -179,7 +180,12 @@ export class DancePlayer {
     }
 
     // Dispatch every event whose lead-adjusted time has passed.
-    const horizon = t + this.#opts.leadTime;
+    //
+    // The lead exists to cover the duck's windup, which is a fixed number
+    // of REAL seconds. The playhead is in video seconds, so at half speed
+    // the same lead would fire the move twice as early. Scaling by the
+    // rate keeps the duck's motion landing on the beat at any speed.
+    const horizon = t + this.#opts.leadTime * (this.#opts.rate || 1);
     while (this.#cursor < this.#events.length && this.#events[this.#cursor].t <= horizon) {
       const ev = this.#events[this.#cursor++];
       // A move more than a second stale is one we scrubbed past; firing

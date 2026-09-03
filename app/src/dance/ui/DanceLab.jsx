@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import { gameApi, useGame } from "../../store.js";
-import { ComicButton, ANTON, CREAM, COMIC_INK, COMIC_ORANGE, ACID_CYAN } from "../../ui/comic.jsx";
+import { ComicButton, ANTON, CREAM, COMIC_INK, COMIC_ORANGE, COMIC_YELLOW, ACID_CYAN } from "../../ui/comic.jsx";
 import { MONO } from "../../theme.js";
 import { Panel, Meter, Knob, Toggle } from "./Panel.jsx";
 import Stage from "./Stage.jsx";
@@ -117,6 +117,16 @@ export default function DanceLab() {
   }, [s.track, s.events, s.beats, player]);
 
   useEffect(() => { player.setOptions(s.playback); }, [s.playback, player]);
+
+  // Push the speed onto the media itself. preservesPitch keeps a slowed
+  // clip listenable: without it the music drops a fifth at half speed and
+  // the routine stops reading as a dance to that song.
+  useEffect(() => {
+    const m = s.isDemo ? clockRef.current : videoRef.current;
+    if (!m) return;
+    m.playbackRate = s.playback.rate;
+    if ("preservesPitch" in m) m.preservesPitch = true;
+  }, [s.playback.rate, s.isDemo, s.videoUrl, s.duration]);
 
   useEffect(() => {
     // The player steps 50 times a second. Mirroring every one of those
@@ -313,9 +323,43 @@ export default function DanceLab() {
         )}
       </Panel>
 
+      {/* ── Speed ──────────────────────────────────────────────────── */}
+      {ready && s.track?.fit && (
+        <Panel title="3. Speed" accent={COMIC_YELLOW}
+          right={`duck needs ${s.track.fit.demand.toFixed(1)}x longer`}>
+          <Row gap={0.6}>
+            {[1, 0.75, 0.5, 0.35].map((r) => (
+              <Box key={r} onClick={() => setPlayback({ rate: r })}
+                sx={{ cursor: "pointer", fontFamily: MONO, fontSize: "0.62rem",
+                  px: 1, py: 0.35,
+                  border: `2px solid ${s.playback.rate === r ? COMIC_ORANGE : "rgba(255,255,255,0.22)"}`,
+                  color: s.playback.rate === r ? COMIC_INK : "rgba(255,255,255,0.72)",
+                  background: s.playback.rate === r ? COMIC_ORANGE : "transparent" }}>
+                {r === 1 ? "full speed" : `${r}x`}
+              </Box>
+            ))}
+            <ComicButton size="xs" scheme="paper" variant="outline" onDark
+              onClick={() => setPlayback({ rate: s.track.fit.recommendedRate })}>
+              Fit to the duck
+            </ComicButton>
+          </Row>
+          {s.track.fit.demand > 1.15 ? (
+            <Note tone={s.playback.rate <= s.track.fit.recommendedRate ? "dim" : "warn"}>
+              This dancer moves about {s.track.fit.demand.toFixed(1)} times faster
+              than the duck can follow, worst on {s.track.fit.limitedBy}. A command
+              channel takes roughly 0.4 s to swing from one extreme to the other,
+              so at full speed most of the motion is thrown away and what is left
+              reads as twitching. {s.track.fit.recommendedRate}x speed gives it room.
+            </Note>
+          ) : (
+            <Note>The duck can follow this one at full speed.</Note>
+          )}
+        </Panel>
+      )}
+
       {/* ── Command ────────────────────────────────────────────────── */}
       {ready && (
-        <Panel title="3. What the duck is told" accent={COMIC_ORANGE}
+        <Panel title="4. What the duck is told" accent={COMIC_ORANGE}
           right={s.liveStatus ? `mode ${s.liveStatus.mode}` : undefined}>
           <Meter label="forward" value={live?.[CH.VX] ?? 0} range={LIMITS.vxFwd} unit=" m/s" />
           <Meter label="sideways" value={live?.[CH.VY] ?? 0} range={LIMITS.vy} unit=" m/s" />
@@ -330,7 +374,7 @@ export default function DanceLab() {
 
       {/* ── Moves ──────────────────────────────────────────────────── */}
       {ready && (
-        <Panel title="4. The moves" right={`${s.events.length} scheduled`}>
+        <Panel title="5. The moves" right={`${s.events.length} scheduled`}>
           <Row gap={0.6}>
             {s.events.slice(0, 14).map((e, i) => (
               <Box key={i} sx={{
@@ -360,7 +404,7 @@ export default function DanceLab() {
 
       {/* ── Tuning ─────────────────────────────────────────────────── */}
       {ready && (
-        <Panel title="5. Tuning">
+        <Panel title="6. Tuning">
           <Knob label="Turning" value={s.tuning.gainTurn} min={0} max={2} onChange={(v) => setTuning({ gainTurn: v })} />
           <Knob label="Sideways sway" value={s.tuning.gainSway} min={0} max={2} onChange={(v) => setTuning({ gainSway: v })} />
           <Knob label="Stepping" value={s.tuning.gainStride} min={0} max={2} onChange={(v) => setTuning({ gainStride: v })} />

@@ -100,7 +100,12 @@ policy gets it back up on its own and the routine carries on, with
 commands held at zero in the meantime. Turning the sensitivity or the
 turn gain down makes it rarer.
 
-Not verified: tracking quality on real dance footage. That needs real
+Tracking on real footage turned out fine: a 44 s phone clip of one dancer
+came back 100% tracked with the tempo read at 125.7 BPM. What that clip
+exposed instead was the speed problem above, and that sit and stand, the
+two most expensive skills, crowded every other move out of the routine.
+
+Not verified: tuning across a range of real footage. That needs real
 clips, so treat the tuning defaults as a starting point rather than a
 finished calibration. The mirror toggle and the per-axis head sign flips
 are there because a screenshot settles polarity faster than arithmetic.
@@ -115,6 +120,13 @@ Known limits:
 - **Skills are slow.** A kick occupies the duck for about a second and a
   sit for three, so a fast routine will have moves dropped. The timeline
   shows which, and why.
+- **Most dance is too fast for the duck.** A command channel takes about
+  0.4 s to swing from one extreme to the other, and a beat at 125 BPM is
+  0.48 s. A dancer moving on every beat asks for a full swing and back
+  inside one beat, which the duck cannot do, so the slew limiter throws
+  most of the motion away and what is left reads as twitching. The Speed
+  panel measures this per clip and will fit the playback rate to what the
+  duck can actually follow.
 - **The beat grid is a constant tempo.** It will not follow a clip that
   speeds up or slows down.
 

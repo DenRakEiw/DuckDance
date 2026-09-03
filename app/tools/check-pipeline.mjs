@@ -129,6 +129,32 @@ ok("track has one row per control step", track.data.length === track.n * NUM_CH)
   ok("mirror flips the turn direction", flipped > same * 4, `${flipped} flipped, ${same} same`);
 }
 
+// Followability: the report that tells the user to slow the clip down.
+{
+  ok("the track reports how well the duck can follow", !!track.fit,
+    track.fit ? `${track.fit.demand.toFixed(2)}x, limited by ${track.fit.limitedBy}` : "");
+
+  // A dancer moving at half the tempo demands roughly half the slew rate,
+  // so the recommendation must move the right way. This is the property
+  // the speed control rests on.
+  const fast = retarget(extractFeatures(synthRoutine({ duration: 12, fps: 30, bpm: 150 })));
+  const slow = retarget(extractFeatures(synthRoutine({ duration: 12, fps: 30, bpm: 60 })));
+  ok("a faster dancer demands more of the duck", fast.fit.demand > slow.fit.demand,
+    `${fast.fit.demand.toFixed(2)}x at 150 BPM vs ${slow.fit.demand.toFixed(2)}x at 60 BPM`);
+  ok("the faster dancer is told to slow down at least as much",
+    fast.fit.recommendedRate <= slow.fit.recommendedRate,
+    `${fast.fit.recommendedRate}x vs ${slow.fit.recommendedRate}x`);
+  ok("recommended rates stay in a usable range",
+    [fast, slow].every((t) => t.fit.recommendedRate > 0.3 && t.fit.recommendedRate <= 1));
+
+  // A motionless dancer asks nothing of the duck and must not be slowed.
+  const still = [];
+  for (let i = 0; i < 200; i++) still.push({ t: i / 30, ...synthPose() });
+  const s2 = retarget(extractFeatures(still));
+  ok("a motionless dancer needs no slowdown", s2.fit.recommendedRate === 1,
+    `${s2.fit.recommendedRate}x`);
+}
+
 // ── Level 2: moves ─────────────────────────────────────────────────────
 const calib = calibrate(feats);
 const { events, rejected } = detectMoves(feats, calib, { sensitivity: 1.0 }, []);

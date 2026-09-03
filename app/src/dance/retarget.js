@@ -142,15 +142,63 @@ function resample(t, v, grid) {
 }
 
 // Slew limiter: caps how far a channel may move in one control step.
-function rateLimit(src, maxStep) {
+// Also reports what it had to throw away, because that number is the
+// honest answer to "can this duck dance to this clip at all".
+function rateLimit(src, maxStep, report) {
   const out = new Float32Array(src.length);
   let prev = 0;
+  let clipped = 0;
+  const wanted = [];
   for (let i = 0; i < src.length; i++) {
-    const d = clamp(src[i] - prev, -maxStep, maxStep);
+    const want = src[i] - prev;
+    if (i > 0) wanted.push(Math.abs(src[i] - src[i - 1]));
+    const d = clamp(want, -maxStep, maxStep);
+    if (Math.abs(want) > maxStep + 1e-9) clipped++;
     prev += d;
     out[i] = prev;
   }
+  if (report) {
+    report.clippedFraction = src.length ? clipped / src.length : 0;
+    // How fast this channel actually wants to move, ignoring the odd
+    // spike. Divided by the cap it gives "how many times too fast".
+    report.demand = percentile(wanted, 0.9) / Math.max(1e-9, maxStep);
+  }
   return out;
+}
+
+/**
+ * How well the duck can follow this dancer, and what to do about it.
+ *
+ * A command channel takes about 0.4 s to swing from one extreme to the
+ * other. At 125 BPM a beat is 0.48 s, so a dancer moving on every beat
+ * asks the duck for a full swing and back inside one beat, which it
+ * physically cannot do: the slew limiter eats most of the motion and
+ * what is left reads as twitching rather than dancing.
+ *
+ * Slowing playback by r scales every demanded slew rate by r, so the
+ * largest usable r is simply 1 / (worst demand). Reported rather than
+ * applied, because whether to slow the music is the user's call.
+ */
+function fitToDuck(reports) {
+  let worst = 0, worstCh = "";
+  for (const [name, r] of Object.entries(reports)) {
+    if (r.demand > worst) { worst = r.demand; worstCh = name; }
+  }
+  const raw = worst > 0 ? 1 / worst : 1;
+  // Snap to rates that read as musical divisions rather than an
+  // arbitrary decimal, and never suggest slower than a third: below that
+  // the clip stops being recognisable as the dance it came from.
+  const steps = [1, 0.75, 0.5, 0.35];
+  let recommended = steps[steps.length - 1];
+  for (const st of steps) if (raw >= st) { recommended = st; break; }
+  return {
+    demand: worst,
+    limitedBy: worstCh,
+    recommendedRate: recommended,
+    // Share of control steps where the limiter had to hold a channel
+    // back, on the worst channel.
+    clippedFraction: Math.max(...Object.values(reports).map((r) => r.clippedFraction)),
+  };
 }
 
 function euroPass(src, opts) {
@@ -281,15 +329,18 @@ export function retarget(f, tuning = {}) {
   }
 
   const sm = T.smoothing;
+  const reports = {};
+  const rep = (name) => (reports[name] = { clippedFraction: 0, demand: 0 });
   const filt = {
-    vx: rateLimit(euroPass(raw.vx, { minCutoff: 1.4 / sm, beta: 0.02 }), RATE.vx),
-    vy: rateLimit(euroPass(raw.vy, { minCutoff: 1.6 / sm, beta: 0.02 }), RATE.vy),
-    wz: rateLimit(euroPass(raw.wz, { minCutoff: 2.0 / sm, beta: 0.03 }), RATE.wz),
-    neck: rateLimit(euroPass(raw.neck, { minCutoff: 1.6 / sm, beta: 0.02 }), RATE.head),
-    hp: rateLimit(euroPass(raw.hp, { minCutoff: 2.2 / sm, beta: 0.04 }), RATE.head),
-    hy: rateLimit(euroPass(raw.hy, { minCutoff: 2.2 / sm, beta: 0.04 }), RATE.head),
-    hr: rateLimit(euroPass(raw.hr, { minCutoff: 2.0 / sm, beta: 0.03 }), RATE.head),
+    vx: rateLimit(euroPass(raw.vx, { minCutoff: 1.4 / sm, beta: 0.02 }), RATE.vx, rep("forward")),
+    vy: rateLimit(euroPass(raw.vy, { minCutoff: 1.6 / sm, beta: 0.02 }), RATE.vy, rep("sideways")),
+    wz: rateLimit(euroPass(raw.wz, { minCutoff: 2.0 / sm, beta: 0.03 }), RATE.wz, rep("turning")),
+    neck: rateLimit(euroPass(raw.neck, { minCutoff: 1.6 / sm, beta: 0.02 }), RATE.head, rep("lean")),
+    hp: rateLimit(euroPass(raw.hp, { minCutoff: 2.2 / sm, beta: 0.04 }), RATE.head, rep("nodding")),
+    hy: rateLimit(euroPass(raw.hy, { minCutoff: 2.2 / sm, beta: 0.04 }), RATE.head, rep("head turns")),
+    hr: rateLimit(euroPass(raw.hr, { minCutoff: 2.0 / sm, beta: 0.03 }), RATE.head, rep("head tilts")),
   };
+  const fit = fitToDuck(reports);
 
   const data = new Float32Array(n * NUM_CH);
   for (let i = 0; i < n; i++) {
@@ -308,7 +359,7 @@ export function retarget(f, tuning = {}) {
 
   return {
     fps: TRACK_FPS, dt: TRACK_DT, t0, duration, n, data, tracked, calib,
-    tuning: T,
+    tuning: T, fit,
     debug: { footAlt: footAltS, cadence, depthNorm, swayNorm, yawRate },
   };
 }

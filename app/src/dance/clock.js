@@ -21,6 +21,9 @@ export class SyntheticClock {
 
   constructor(duration = 0) {
     this.duration = duration;
+    // Mirrors HTMLMediaElement.playbackRate, so the lab can slow the
+    // built-in routine down exactly the way it slows a video.
+    this.playbackRate = 1;
   }
 
   get currentTime() {
@@ -48,7 +51,7 @@ export class SyntheticClock {
       // instead of jumping the routine forward by however long it slept.
       const dt = Math.min(0.1, (now - this.#last) / 1000);
       this.#last = now;
-      this.#t += dt;
+      this.#t += dt * (this.playbackRate || 1);
       if (this.#t >= this.duration) {
         this.#t = this.duration;
         this.onTime?.(this.#t);
