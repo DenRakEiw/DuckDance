@@ -18,6 +18,7 @@
 
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { signed } from "../game/signed.js";
+import { stampClock } from "./stamp.js";
 
 const base = import.meta.env?.BASE_URL ?? "/";
 const asset = (p) => signed(`${base}${p}`.replace(/([^:]\/)\/+/g, "$1"));
@@ -59,6 +60,17 @@ export async function createLandmarker({ model = "full", delegate = "GPU" } = {}
 }
 
 const waitFor = (el, ev) => new Promise((res) => el.addEventListener(ev, res, { once: true }));
+const after = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// Move the playhead and wait for the frame to actually be there.
+// A video already sitting on the requested time fires no "seeked" at all,
+// so awaiting one would wait for ever; and a decoder that swallows the
+// event should cost one stale frame, not the whole analysis.
+const seekTo = (v, t) => {
+  if (Math.abs(v.currentTime - t) < 1e-3) return Promise.resolve();
+  v.currentTime = t;
+  return Promise.race([waitFor(v, "seeked"), after(2000)]);
+};
 
 // Load a file into a detached video element and wait until it can be
 // decoded frame by frame.
@@ -91,7 +103,8 @@ export async function loadVideo(src) {
  * @param {"auto"|"playback"|"seek"} o.mode
  * @param {(p:{done:number,total:number,t:number})=>void} o.onProgress
  * @param {AbortSignal} o.signal
- * @returns {Promise<{frames:Array, fps:number, mode:string, dropped:number}>}
+ * @returns {Promise<{frames:Array, fps:number, mode:string, dropped:number,
+ *                    errors:number, firstError:string}>}
  */
 export async function captureFrames({
   video, landmarker, targetFps = 30, maxDuration = 90, rate = 2,
@@ -104,16 +117,21 @@ export async function captureFrames({
 
   const frames = [];
   let dropped = 0;
-  // detectForVideo rejects a timestamp that does not advance, and two
-  // decoded frames can share a millisecond after rounding.
-  let lastStamp = -1;
+  // A frame the detector refused to look at at all. Kept apart from
+  // dropped: a clip the tracker never ran on is a broken tracker, not a
+  // clip without a dancer, and only one of those is the user's problem.
+  let errors = 0;
+  let firstError = "";
+  // Timestamps must clear anything already fed to this landmarker, and
+  // two decoded frames can share a millisecond after rounding.
+  const stampAt = stampClock(landmarker);
   const detect = (t) => {
-    const stamp = Math.max(lastStamp + 1, Math.round(t * 1000));
-    lastStamp = stamp;
     let res;
     try {
-      res = landmarker.detectForVideo(video, stamp);
-    } catch {
+      res = landmarker.detectForVideo(video, stampAt(t));
+    } catch (e) {
+      errors++;
+      firstError ||= e?.message || String(e);
       dropped++;
       return { t, landmarks: null, worldLandmarks: null };
     }
@@ -126,9 +144,8 @@ export async function captureFrames({
   const abort = () => signal?.aborted;
 
   if (chosen === "playback") {
-    video.currentTime = 0;
+    await seekTo(video, 0);
     video.playbackRate = rate;
-    await waitFor(video, "seeked").catch(() => {});
     let lastKept = -Infinity;
     let finished = false;
     const done = new Promise((resolve) => {
@@ -164,13 +181,12 @@ export async function captureFrames({
     for (let i = 0; i < total; i++) {
       if (abort()) break;
       const t = Math.min(duration, i * minGap);
-      video.currentTime = t;
-      await waitFor(video, "seeked");
+      await seekTo(video, t);
       frames.push(detect(t));
       onProgress?.({ done: i + 1, total, t });
     }
     video.pause();
   }
 
-  return { frames, fps: targetFps, mode: chosen, dropped };
+  return { frames, fps: targetFps, mode: chosen, dropped, errors, firstError };
 }

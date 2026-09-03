@@ -14,6 +14,7 @@ import { retarget, calibrate, sampleTrack, CH, NUM_CH, LIMITS, TRACK_FPS, TRACK_
 import { detectMoves, OCCUPANCY } from "../src/dance/moves.js";
 import { retargetPhrased, phraseGrid } from "../src/dance/phrase.js";
 import { onsetEnvelope, estimateTempo, beatGrid, analyseBuffer } from "../src/dance/beat.js";
+import { stampClock } from "../src/dance/stamp.js";
 
 let failures = 0;
 const results = [];
@@ -365,6 +366,54 @@ ok("the routine yields moves", events.length > 0, `${events.length} events, ${re
   ok("silence produces no onsets", Array.from(env).every((v) => v === 0));
   ok("silence produces no beat grid", beats.length === 0 && bpm === 0,
     `${beats.length} beats, ${bpm} BPM`);
+}
+
+// -- Level 5: capture timestamps ---------------------------------------
+//
+// MediaPipe's VIDEO graph throws on a timestamp that does not advance,
+// for that call and every later one below the mark. A landmarker outlives
+// the clip it was built for, so the stamps have to outlive it too, or the
+// second clip of a session tracks 0% of its frames.
+{
+  const landmarker = {};
+  const first = stampClock(landmarker);
+  const a = [0, 0.5, 1.5, 40].map(first);
+  ok("stamps follow the clip's own timing", a[1] - a[0] === 500 && a[3] - a[2] === 38500,
+    a.join(" "));
+
+  const second = stampClock(landmarker);
+  const b = [0, 0.5, 30].map(second);
+  ok("a second clip starts above the first",
+    b[0] > a[a.length - 1], `${a[a.length - 1]} then ${b[0]}`);
+  ok("a second clip keeps its own gaps", b[1] - b[0] === 500 && b[2] - b[1] === 29500);
+
+  // The seek fallback re-runs the same video after playback reached the
+  // end: same times again, and they still have to climb.
+  const third = stampClock(landmarker);
+  const c = [0, 0.5, 30].map(third);
+  ok("a re-run of the same clip climbs again", c[0] > b[b.length - 1]);
+
+  // Two decoded frames can round to the same millisecond, and a decoder
+  // that hands one back twice must not stall the graph either.
+  const fourth = stampClock(landmarker);
+  const d = [1, 1, 1.0004, 0.9].map(fourth);
+  ok("repeated and backwards times still advance",
+    d.every((v, i) => i === 0 || v > d[i - 1]), d.join(" "));
+
+  // Where the floor is read matters: a clock opened early but used late
+  // must still land above whatever ran in between.
+  {
+    const lm = {};
+    const early = stampClock(lm);
+    const other = stampClock(lm);
+    other(0); other(20);
+    ok("a clock reads the floor when it stamps, not when it opens",
+      early(0) > 20000, `${early(0)}`);
+  }
+
+  // Separate landmarkers share nothing: a fresh one starts from zero.
+  const fresh = stampClock({});
+  ok("a fresh landmarker starts from zero", fresh(0) === 0);
 }
 
 const w = Math.max(...results.map((r) => r[1].length));

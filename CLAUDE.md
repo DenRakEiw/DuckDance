@@ -83,6 +83,7 @@ audio ──► beat ──► tempo, beat grid ──────────�
 | File | Role |
 | --- | --- |
 | `capture.js` | MediaPipe over the video; playback path with automatic fallback to frame stepping |
+| `stamp.js` | Strictly rising detector timestamps, per landmarker rather than per clip |
 | `features.js` | Landmarks → body basis, head angles, limb and posture signals. **Raw and uncentred.** |
 | `retarget.js` | Direct path: every frame → a command, rate limiter discards the rest |
 | `phrase.js` | Phrased path (**the default**): builds a command that fits by construction |
@@ -108,6 +109,21 @@ after touching any geometry.
 Sign conventions everything else assumes: **positive is toward the
 dancer's own left**, for body yaw, head yaw and head roll. Head pitch
 positive is chin up. `leanFwd` positive is bowing toward the lens.
+
+**The tracker's clock outlives the clip.** MediaPipe's VIDEO mode wants
+timestamps that rise for the lifetime of the *landmarker*, and the store
+keeps one landmarker for the whole session because building it is
+expensive. A second clip whose stamps start again near zero does not get
+its frames skipped: every `detectForVideo` throws `Packet timestamp
+mismatch ... minimum expected timestamp is 40000001 but received 0`, the
+capture loop counted that as a frame without a dancer, and the user was
+told "no dancer found (0% of frames)" about a clip that was fine. The
+seek fallback hit the same wall inside a single run, because it restarts
+the same video from the top after playback has reached the end. The floor
+now lives with the landmarker (`stamp.js`) and each run picks up above
+it, offset so the gaps between frames stay as the video had them.
+Detector errors are counted apart from missing detections, so this class
+of failure says it is ours rather than blaming the footage.
 
 **Never normalise one limb by a shared scale.** Limb signals divide by
 `torsoLen`, not by leg length: the torso holds still while limbs move, so
@@ -186,10 +202,10 @@ priced together with the stand that ends it.
 ## Testing
 
 `tools/check-features.mjs` (31 checks) pins the sign conventions using the
-synthetic dancer. `tools/check-pipeline.mjs` (45 checks) covers the track
+synthetic dancer. `tools/check-pipeline.mjs` (52 checks) covers the track
 staying inside the policy limits, the slew limiter, phrased output fitting
-by construction, move scheduling and budget, and the beat analyser against
-a synthetic click track. Both run under node; no browser, no video.
+by construction, move scheduling and budget, the beat analyser against a
+synthetic click track, and the capture timestamps rising across clips. Both run under node; no browser, no video.
 
 The browser pane in this environment throttles rAF hard, so the sim's
 render loop and the entrance ceremony only advance while screenshots force

@@ -159,6 +159,15 @@ export async function analyseFile(file) {
     if (capture.frames.length < 10) {
       throw new Error("no usable frames came out of this video");
     }
+    // Frames the detector threw on are not frames without a dancer, and
+    // telling the user to light the room better when the tracker never
+    // ran wastes their time on a clip that was fine. This one is ours.
+    if (capture.errors > capture.frames.length * 0.5) {
+      throw new Error(
+        `the pose tracker failed on ${capture.errors} of ${capture.frames.length} frames ` +
+        `(${capture.firstError || "no message"}). Reloading the page should clear it.`,
+      );
+    }
     // A clip where the tracker almost never found a person cannot produce
     // a routine worth performing, and the arithmetic downstream would
     // happily build one anyway out of a handful of stray detections.
