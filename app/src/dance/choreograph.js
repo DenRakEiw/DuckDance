@@ -51,7 +51,10 @@ export const DEFAULT_MUSIC_TUNING = {
   // floor, so sustained targets are capped below it. The number is the
   // one phrase.js arrived at the hard way.
   sustainedCeiling: 0.8,
-  holdBody: 0.35,      // share of a gap spent holding a body pose
+  // Share of a gap spent holding rather than moving. Every point of
+  // this is transition time taken away from the fit budget, which on a
+  // beat-rate figure is what decides its amplitude.
+  holdBody: 0.2,
   holdHead: 0.15,      // the head is nearly always moving
   // Off by default, and the number that decided it: with kicks scheduled
   // on the loud accents, a 40 s test routine put the duck on the floor at
@@ -77,22 +80,48 @@ export const DEFAULT_MUSIC_TUNING = {
 // `energy` is what the figure asks of the duck, used to match figures to
 // how loud the section is. `travel` marks the ones that move the duck
 // across the floor rather than turning or swaying on the spot.
+//
+// TWO MEASURED FACTS DECIDE EVERYTHING BELOW. Both come from driving the
+// sim directly with a held command and watching the ankle bodies:
+//
+//   vx 0.12, 0.16, 0.19  ->  foot lift 0.0 mm, 1 cm of travel: a lean
+//   vx 0.21              ->  foot lift  18 mm, 13 cm: STEPPING
+//   vx 0.25              ->  foot lift  19 mm, 29 cm
+//   vy 0.15, the limit   ->  foot lift 0.1 mm,  4 mm: a lean
+//
+// So the gait has a THRESHOLD at about 0.20 m/s forward, and sideways
+// the duck NEVER steps, at any value the policy allows. Every bit of
+// visible footwork has to come from vx, above 0.20, held long enough to
+// take a step. vy is a lean and nothing more; it is still worth having,
+// because a lean on the beat reads, but it will never be the weight
+// shift from one leg to the other that it looks like on paper.
 
 const BODY = [
   {
-    name: "hold", energy: 0, travel: false,
-    figure: () => [],
+    name: "settle", energy: 0.12, travel: false,
+    // The quiet one. Still a weight change every half bar, because a
+    // body that does NOTHING is not contrast, it is a duck standing
+    // there while its head wobbles.
+    figure: (b) => [
+      { beat: 0, ch: CH.VY, v: b.flip * 0.55 },
+      { beat: 2, ch: CH.VY, v: -b.flip * 0.55 },
+    ],
   },
   {
-    name: "sway", energy: 0.35, travel: false,
-    // One full swing per bar: out on the one, back on the three.
+    name: "sway", energy: 0.3, travel: false,
+    // One full swing per bar, so it gets the whole half bar to build
+    // amplitude in and reads as a big lean from foot to foot.
     figure: (b) => [
       { beat: 0, ch: CH.VY, v: b.flip },
       { beat: 2, ch: CH.VY, v: -b.flip },
     ],
   },
   {
-    name: "swayQuick", energy: 0.6, travel: false,
+    name: "weightShift", energy: 0.4, travel: false,
+    // Foot to foot ON THE BEAT. Half a beat of transition is not enough
+    // for a full sideways swing, so the renderer shrinks this to about
+    // two thirds; that is the trade, and it is worth it because the
+    // policy answers an alternating sideways command by stepping.
     figure: (b) => [
       { beat: 0, ch: CH.VY, v: b.flip },
       { beat: 1, ch: CH.VY, v: -b.flip },
@@ -102,35 +131,52 @@ const BODY = [
   },
   {
     name: "pivot", energy: 0.45, travel: false,
-    // Turn out and back. Net rotation over the bar is zero, so a routine
-    // of these leaves the duck facing where it started.
     figure: (b) => [
       { beat: 0, ch: CH.WZ, v: b.flip * 0.9 },
       { beat: 2, ch: CH.WZ, v: -b.flip * 0.9 },
     ],
   },
   {
-    name: "spin", energy: 0.9, travel: false,
-    // A held turn: the one figure that keeps a channel near its ceiling,
-    // which is why it is priced as the most expensive thing here and only
-    // ever appears in a peak section.
-    figure: (b) => [
-      { beat: 0, ch: CH.WZ, v: b.flip },
-      { beat: 3, ch: CH.WZ, v: b.flip },
-      { beat: 4, ch: CH.WZ, v: 0 },
-    ],
-  },
-  {
-    name: "stepInOut", energy: 0.5, travel: true,
+    name: "step", energy: 0.5, travel: true,
+    // A step out and a step back, one every two beats.
+    //
+    // Half-bar rather than per-beat, and that is forced rather than
+    // chosen: swinging vx from one limit to the other is a change of
+    // 0.45, and a single beat only affords 0.25 of it, so a per-beat
+    // version got shrunk to a fifth of full and never left the ground.
+    // Two beats affords 0.5, so this one arrives at full size.
     figure: () => [
       { beat: 0, ch: CH.VX, v: 1 },
       { beat: 2, ch: CH.VX, v: -1 },
     ],
   },
   {
-    name: "boxStep", energy: 0.75, travel: true,
-    // Forward, across, back, across: the duck traces a box and ends where
-    // it began.
+    name: "walk", energy: 0.36, travel: true,
+    // The only figure that actually WALKS, and the shape is dictated by
+    // the gait threshold rather than by taste.
+    //
+    // The policy needs about 0.22 m/s before it unweights a foot, and a
+    // channel needs 0.375 s of transition to climb from rest to the 0.25
+    // limit. So this brings its own run-up: it forces the channel to zero
+    // on the bar line, spends a beat getting to full speed, HOLDS there
+    // for two beats, and spends the last beat stopping. Two beats at the
+    // limit is about 23 cm of travel, which is several steps.
+    //
+    // Written as one target per beat because the earlier version, a
+    // single target at the bar line, could not clear the threshold: a
+    // beat-rate figure in the bar before it left vx at the opposite
+    // limit, and the fit pass then shrank the step to a fifth of what
+    // was asked for. A figure that starts from rest cannot be poisoned
+    // by its neighbour.
+    figure: (b) => [
+      { beat: 0, ch: CH.VX, v: b.flip2 },
+      { beat: 1, ch: CH.VX, v: b.flip2 },
+      { beat: 3, ch: CH.VX, v: b.flip2 },
+      { beat: 4, ch: CH.VX, v: b.flip2 },
+    ],
+  },
+  {
+    name: "stepSway", energy: 0.6, travel: true,
     figure: (b) => [
       { beat: 0, ch: CH.VX, v: 1 },
       { beat: 1, ch: CH.VY, v: b.flip },
@@ -148,12 +194,36 @@ const BODY = [
     ],
   },
   {
-    name: "shuffle", energy: 0.85, travel: true,
+    name: "boxStep", energy: 0.75, travel: true,
+    // Forward, across, back, across: the duck traces a box and ends
+    // where it began.
     figure: (b) => [
       { beat: 0, ch: CH.VX, v: 1 },
       { beat: 1, ch: CH.VY, v: b.flip },
-      { beat: 2, ch: CH.VY, v: -b.flip },
-      { beat: 3, ch: CH.VX, v: -1 },
+      { beat: 2, ch: CH.VX, v: -1 },
+      { beat: 3, ch: CH.VY, v: -b.flip },
+    ],
+  },
+  {
+    name: "shuffle", energy: 0.85, travel: true,
+    figure: (b) => [
+      { beat: 0, ch: CH.VX, v: 1 },
+      { beat: 0, ch: CH.VY, v: b.flip },
+      { beat: 1, ch: CH.VY, v: -b.flip },
+      { beat: 2, ch: CH.VX, v: -1 },
+      { beat: 2, ch: CH.VY, v: b.flip },
+      { beat: 3, ch: CH.VY, v: -b.flip },
+    ],
+  },
+  {
+    name: "spin", energy: 0.95, travel: false,
+    // A held turn: the one figure that keeps a channel near its ceiling,
+    // which is why it is priced as the most expensive thing here and
+    // only ever appears in a peak section.
+    figure: (b) => [
+      { beat: 0, ch: CH.WZ, v: b.flip },
+      { beat: 3, ch: CH.WZ, v: b.flip },
+      { beat: 4, ch: CH.WZ, v: 0 },
     ],
   },
 ];
@@ -252,7 +322,10 @@ function pick(list, want, rand, spread) {
  */
 function planSection(sec, bars, T, rand) {
   const nBars = sec.i1 - sec.i0;
-  const want = 0.2 + sec.level * 0.7;
+  // The floor matters more than the ceiling. At 0.2 the nearest figure
+  // to a quiet section was whatever did least, and a routine that opens
+  // with four bars of nothing is the one people judge the whole thing by.
+  const want = 0.35 + sec.level * 0.55;
   const motifLen = nBars >= 8 ? 4 : 2;
   const spread = T.variation;
 
@@ -263,6 +336,17 @@ function planSection(sec, bars, T, rand) {
       head: pick(HEAD, want * 0.9 + 0.15, rand, spread),
     });
   }
+  // Every motif must contain at least one figure that clears the gait
+  // threshold, or the section has no footwork in it at all. Left to
+  // chance, three seeds out of five picked nothing that travels and the
+  // duck spent the whole song leaning: which is exactly the complaint
+  // this library was rewritten to answer.
+  if (!motif.some((m) => m.body.travel)) {
+    const travellers = BODY.filter((m) => m.travel);
+    const at = Math.floor(rand() * motif.length);
+    motif[at].body = pick(travellers, want, rand, spread);
+  }
+
   const fill = pick(BODY, Math.min(1, want + 0.3), rand, spread);
 
   const plan = [];
@@ -273,14 +357,22 @@ function planSection(sec, bars, T, rand) {
     // The duck alternates which way a figure goes, so a sway is a sway
     // rather than a drift and a pivot comes back.
     const flip = (k & 1) ? -1 : 1;
+    // A slower alternation for figures that need to hold one direction
+    // longer than a bar. Two bars out, two back: still balanced, but the
+    // hold is twice as long, which is what gets a walk over the gait
+    // threshold for long enough to be several steps rather than one.
+    const flip2 = (k & 2) ? -1 : 1;
     plan.push({
-      bar, section: sec, flip,
+      bar, section: sec, flip, flip2,
       body: isFill ? fill : slot.body,
       head: slot.head,
       // Loud bars inside a section get more than quiet ones, so the
       // routine breathes with the music instead of running flat out.
-      size: clamp(0.55 + 0.45 * sec.level, 0.3, 1) *
-            clamp(0.8 + 0.5 * (bar.onset + bar.low) / 2, 0.6, 1.25),
+      // The velocity policy absorbs a small command with a lean and only
+      // STEPS above a certain size, so a quiet section asking for half
+      // amplitude got no footwork at all. Quiet now means 0.75, not 0.55.
+      size: clamp(0.75 + 0.25 * sec.level, 0.5, 1) *
+            clamp(0.85 + 0.4 * (bar.onset + bar.low) / 2, 0.7, 1.25),
     });
   }
   return plan;
@@ -290,6 +382,14 @@ function planSection(sec, bars, T, rand) {
 // the policy walks forward faster than it backs up.
 function scaleFor(ch, v) {
   switch (ch) {
+    // The full asymmetric range, forward faster than back, because the
+    // policy has a GAIT THRESHOLD and the top of the range is on the far
+    // side of it. Measured against the sandbox's own keyboard: a held
+    // 0.25 walks the duck 0.31 m in 3 s and lifts a foot 18 mm; a held
+    // 0.20 moves it 11 mm and never unweights a foot. Capping vx
+    // symmetrically to kill drift bought balance at the price of every
+    // step, which was the wrong half of the trade. The drift is dealt
+    // with properly by the zero-mean pass in render().
     case CH.VX: return v >= 0 ? v * LIMITS.vxFwd : v * Math.abs(LIMITS.vxBack);
     case CH.VY: return v * LIMITS.vy;
     case CH.WZ: return v * LIMITS.wz;
@@ -323,8 +423,9 @@ function render(plan, duration, T) {
 
   for (const step of plan) {
     const { bar, flip } = step;
+    void flip;
     const beatDur = (bar.t1 - bar.t0) / Math.max(1, bar.beats.length);
-    const ctx = { flip, bar };
+    const ctx = { flip, flip2: step.flip2, bar };
     const targets = [
       ...step.body.figure(ctx).map((x) => ({ ...x, body: true })),
       ...step.head.figure(ctx).map((x) => ({ ...x, body: false })),
@@ -336,8 +437,22 @@ function render(plan, duration, T) {
     }
     for (const x of targets) {
       const gain = x.body ? T.gainBody : T.gainHead;
-      const ceil = x.body ? T.sustainedCeiling : 1;
-      const norm = clamp(x.v * step.size * T.intensity * gain, -ceil, ceil);
+      // The ceiling exists because HOLDING A TURN near the policy limit
+      // puts the duck on the floor. Sideways and forward velocity carry
+      // no such risk, and capping them was quietly costing the footwork
+      // a fifth of its size for nothing.
+      const ceil = x.ch === CH.WZ ? T.sustainedCeiling : 1;
+      // Forward travel does not scale with the section.
+      //
+      // The gait has a THRESHOLD: below about 0.22 m/s the policy holds
+      // both feet down and leans instead of stepping. So the usual
+      // dynamics, which shrink a quiet section to 65% of full size, do
+      // not make a smaller walk there - they make no walk at all, which
+      // is exactly what the duck was doing. Musical light and shade has
+      // to come from WHICH figures are chosen and how often, not from
+      // scaling a step down through the floor of what the legs can do.
+      const size = x.ch === CH.VX ? Math.max(step.size, 0.95) : step.size;
+      const norm = clamp(x.v * size * T.intensity * gain, -ceil, ceil);
       keys[x.ch].push({ t: bar.t0 + x.beat * beatDur, v: scaleFor(x.ch, norm) });
     }
   }
@@ -372,6 +487,30 @@ function render(plan, duration, T) {
         v = u <= hold ? a.v : a.v + (b.v - a.v) * smooth((u - hold) / (1 - hold));
       }
       data[i * NUM_CH + c] = v;
+    }
+  }
+
+  // Zero the mean of the travel channels.
+  //
+  // vx and vy are VELOCITIES, so their mean over the routine is exactly
+  // the speed at which the duck leaves the stage. Figures are written to
+  // balance out within a bar, but the fit pass breaks that: it shrinks a
+  // target toward its predecessor, which always biases the channel in
+  // the direction it is already going. Measured, that left a metre of
+  // creep in 48 s, four metres over a song, and the duck ends up in a
+  // wall.
+  //
+  // Subtracting the mean is free where any other correction is not: a
+  // constant has zero slope, so it cannot cost a single step of the slew
+  // budget, and it leaves the shape of every gesture untouched.
+  for (const c of [CH.VX, CH.VY]) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += data[i * NUM_CH + c];
+    const mean = sum / n;
+    const lo = c === CH.VX ? LIMITS.vxBack : -LIMITS.vy;
+    const hi = c === CH.VX ? LIMITS.vxFwd : LIMITS.vy;
+    for (let i = 0; i < n; i++) {
+      data[i * NUM_CH + c] = clamp(data[i * NUM_CH + c] - mean, lo, hi);
     }
   }
   return { data, n, shrunk };

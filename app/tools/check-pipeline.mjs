@@ -536,8 +536,43 @@ ok("the routine yields moves", events.length > 0, `${events.length} events, ${re
       y += track.data[i * NUM_CH + CH.VY] * TRACK_DT;
     }
     const travel = Math.hypot(x, y);
-    ok("dancing on the spot stays on the spot", travel < 1.2,
+    // Tight on purpose. At 1.2 m this passed while the duck was creeping
+    // forward all song, because vx was scaled asymmetrically and every
+    // out-and-back figure netted a step.
+    ok("dancing on the spot stays on the spot", travel < 0.5,
       `net travel ${travel.toFixed(2)} m over ${music.duration} s`);
+  }
+
+  // The gait has a threshold. Measured against the sim by holding a
+  // command and watching the ankle bodies: 0.19 m/s forward lifts no
+  // foot at all and moves the duck a centimetre, 0.21 lifts it 18 mm and
+  // walks 13 cm. Sideways never steps, at any value the policy allows.
+  // So a routine whose vx stays under 0.20 is a routine where the duck
+  // leans through the whole song without taking a step, which is exactly
+  // what it used to do.
+  {
+    const GAIT = 0.20;
+    let over = 0, run = 0, longest = 0;
+    for (let i = 0; i < track.n; i++) {
+      if (Math.abs(track.data[i * NUM_CH + CH.VX]) > GAIT) { over++; run++; longest = Math.max(longest, run); }
+      else run = 0;
+    }
+    ok("the routine clears the gait threshold", over > 0,
+      `${((over / track.n) * 100).toFixed(0)}% of the routine over ${GAIT} m/s`);
+    ok("and holds it long enough to take a step", longest * TRACK_DT > 0.5,
+      `longest run ${(longest * TRACK_DT).toFixed(2)} s`);
+    // Every seed, not just the lucky ones: a motif with no travelling
+    // figure in it leaves a whole section without footwork.
+    let worst = null;
+    for (let seed = 1; seed <= 8; seed++) {
+      const t = choreograph(music, { seed }).track;
+      let any = false;
+      for (let i = 0; i < t.n; i++) {
+        if (Math.abs(t.data[i * NUM_CH + CH.VX]) > GAIT) { any = true; break; }
+      }
+      if (!any) worst = `seed ${seed}`;
+    }
+    ok("every seed produces footwork", worst === null, worst ?? "seeds 1-8");
   }
 
   // A routine that never moves passes every check above and is useless.

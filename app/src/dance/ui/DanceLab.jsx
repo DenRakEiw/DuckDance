@@ -155,7 +155,15 @@ export default function DanceLab() {
     const v = videoRef.current;
     if (!v || s.isDemo) return;
     const onTime = () => useDance.setState({ currentTime: v.currentTime });
-    const onEnd = () => useDance.setState({ playing: false });
+    // The end of the clip has to stop the PLAYER, not just flip a flag.
+    // It steps 50 times a second off the media clock, so a clip that has
+    // ended leaves it re-sending the final row for ever: the duck holds
+    // whatever the routine finished on, and if that was a turn near the
+    // policy ceiling it goes over some seconds after the music stopped.
+    const onEnd = () => {
+      player.stop();
+      useDance.setState({ playing: false });
+    };
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("seeking", onTime);
     v.addEventListener("ended", onEnd);
@@ -164,7 +172,7 @@ export default function DanceLab() {
       v.removeEventListener("seeking", onTime);
       v.removeEventListener("ended", onEnd);
     };
-  }, [s.videoUrl, s.isDemo]);
+  }, [s.videoUrl, s.isDemo, player]);
 
   useEffect(() => () => player.stop(), [player]);
 

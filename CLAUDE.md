@@ -165,6 +165,27 @@ it, offset so the gaps between frames stay as the video had them.
 Detector errors are counted apart from missing detections, so this class
 of failure says it is ours rather than blaming the footage.
 
+**The gait has a threshold, and sideways never steps.** The policy does
+not scale smoothly down to zero: below about 0.20 m/s forward it holds
+both feet on the floor and leans instead. Measured by holding a command
+and watching the ankle bodies:
+
+| held command | foot lift | travel in 2 s |
+| --- | --- | --- |
+| vx 0.12 / 0.16 / 0.19 | 0.0 mm | ~1 cm |
+| vx 0.21 | 18 mm | 13 cm |
+| vx 0.25 | 19 mm | 29 cm |
+| vy 0.15, the policy limit | 0.1 mm | 4 mm |
+
+Two consequences, and the whole music library is shaped by them. All
+visible footwork has to come from **vx above 0.20, held long enough** to
+complete a step; and **vy can never step at all**, so a sideways sway is
+a lean and will never be the weight shift from one leg to the other that
+it looks like on paper. This is also why a travel figure must NOT be
+scaled down by section energy: at 65% of full a walk is not a smaller
+walk, it is no walk, which is precisely what the first version did for a
+whole song.
+
 **Never normalise one limb by a shared scale.** Limb signals divide by
 `torsoLen`, not by leg length: the torso holds still while limbs move, so
 it is the only stable ruler. Using average leg length made one raised foot
@@ -245,6 +266,19 @@ A/B-ing against a different author. Everything else is renderer.
 The RNG is seeded, so a song always produces the same routine. Without
 that a tuning knob is unjudgeable and a test is unwritable.
 
+The body works on the **half bar** rather than on the beat wherever it
+travels, and that is arithmetic rather than taste: swinging vx from one
+limit to the other is a change of 0.45, a single beat at 128 BPM affords
+only 0.25 of it, so a per-beat step gets shrunk to a fifth of full and
+never leaves the ground. Two beats afford 0.5, so a half-bar step arrives
+at full size. The `walk` figure alternates on a TWO bar period for the
+same reason: one bar of hold is about a second, and doubling it is what
+turns a step into walking.
+
+Every motif is forced to contain at least one travelling figure. Left to
+chance, three seeds in five picked none and the duck leaned through the
+entire song.
+
 **Skills are off by default here**, and this is the measurement that
 decided it. A 40 s test routine with kicks scheduled on the loud accents
 put the duck on the floor at 25.5 s — 0.2 s after the first kick — and
@@ -291,12 +325,13 @@ priced together with the stand that ends it.
 ## Testing
 
 `tools/check-features.mjs` (31 checks) pins the sign conventions using the
-synthetic dancer. `tools/check-pipeline.mjs` (73 checks) covers the track
+synthetic dancer. `tools/check-pipeline.mjs` (76 checks) covers the track
 staying inside the policy limits, the slew limiter, phrased output fitting
 by construction, move scheduling and budget, the beat analyser against a
 synthetic click track, the capture timestamps rising across clips, and
 the music path end to end: meter, sections, limits, slew, net travel,
-motif repetition, change at the boundary, and determinism. Both run under node; no browser, no video.
+motif repetition, change at the boundary, determinism, and that the
+routine clears the gait threshold on every seed. Both run under node; no browser, no video.
 
 The browser pane in this environment throttles rAF hard, so the sim's
 render loop and the entrance ceremony only advance while screenshots force
@@ -329,10 +364,16 @@ Open:
   defaults them off and is rock solid without them; the video path still
   detects and schedules them, and still goes over about three times in the
   24 s demo.
-- The music path's quiet sections hold the body still for a quarter to a
-  half of their bars, with only the head moving. That is deliberate
-  contrast and it is also the first thing to revisit if a routine reads as
-  lazy: raise the floor of `want` in `planSection`.
+- Whether ~1 s above the gait threshold is enough for a step in practice
+  is not settled. The threshold itself is measured, and the routine now
+  clears it for runs of 0.6 to 3.6 s depending on the seed, but the
+  end-to-end check kept being contaminated: the player used to keep
+  commanding the final row after the media ended, which fought every
+  probe. That is fixed; the measurement should be redone in a real
+  browser, where the entrance ceremony is not starved by rAF throttling.
+- Sideways footwork is impossible with this policy. If the duck should
+  ever visibly shift from leg to leg on the spot, that needs a different
+  policy, not a bigger vy.
 - The beat grid is a constant tempo and will not follow a clip that
   changes speed.
 - Depth from one camera is weak; forward motion leans on step cadence.
