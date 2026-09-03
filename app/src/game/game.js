@@ -1032,6 +1032,44 @@ async function boot({ scene, camera, renderer }) {
     THREE, GLTFLoader, signed, scene, camera, renderer, fx, ceremony,
   });
 
+  // ── The room, on a switch ────────────────────────────────────────────
+  //
+  // Upstream ships the props behind a build-time constant, which is fine
+  // for a Space but useless for a control the user can flick. The
+  // difficulty is that a prop is two things: a GLB in the three.js scene,
+  // which is easy to hide, and a static collision box compiled into the
+  // MuJoCo model, which cannot be added or removed once the model exists.
+  //
+  // So the colliders are ALWAYS compiled in and parked below the floor
+  // when the room is off - the same trick the relief terraces and the
+  // ball already use here. Nothing is rebuilt, the duck never bumps into
+  // an invisible arcade cabinet, and the switch is instant.
+  const PROP_SINK = 20; // metres straight down: well clear of any contact
+  const propGeoms = [];
+  for (let g = 0; g < model.ngeom; g++) {
+    const name = model.geom(g).name ?? "";
+    if (!name.startsWith("prop_")) continue;
+    propGeoms.push({ g, z: model.geom_pos[g * 3 + 2] });
+  }
+  // Off by default: the room is dressing, and a first-time visitor should
+  // meet the duck rather than the furniture. ?props=1 boots with it up.
+  let propsOn = new URLSearchParams(location.search).get("props") === "1";
+  function setProps(on) {
+    propsOn = !!on;
+    for (const groups of Object.values(propGroups)) {
+      for (const group of groups) group.visible = propsOn;
+    }
+    for (const { g, z } of propGeoms) {
+      model.geom_pos[g * 3 + 2] = propsOn ? z : z - PROP_SINK;
+    }
+    mujoco.mj_forward(model, data);
+    return propsOn;
+  }
+  setProps(propsOn);
+  bootNote(propsOn
+    ? `> room on, ${propGeoms.length} colliders`
+    : "> room off - the switch is in the dance panel");
+
   // ── Camera: orbit controls + chase cam + reset glide ─────────────────
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(SPAWN_X, 0, -SPAWN_Y); // orbit around the spawn cell
@@ -1781,6 +1819,10 @@ async function boot({ scene, camera, renderer }) {
     // zero the twist and stop the duck walking.
     dance: {
       source: danceSource,
+      // The 90s bedroom dressing: arcade cabinet, skateboard, boombox,
+      // CRT, the lot. Visual only as far as the routine is concerned.
+      setRoom: (on) => setProps(on),
+      get roomOn() { return propsOn; },
       setTwist: (vx, vy, wz) => danceSource.setCommand(vx, vy, wz),
       setJaw: (v) => danceSource.setJaw(v),
       setPlaying: (v) => {

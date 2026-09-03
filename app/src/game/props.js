@@ -51,7 +51,11 @@ import { ARCADE_H, ARCADE_W, ARCADE_D } from "./constants.js";
 
 // Master switch: false = the whole library stays benched (no prop in the
 // scene, no prop collider), regardless of per-def `enabled` flags.
-export const PROPS_ENABLED = false;
+// DuckDance: flipped from upstream's false. This no longer decides
+// whether the room is SEEN - game.js owns that at runtime, so the toggle
+// in the UI can work without recompiling the MuJoCo model - it only
+// decides whether the props and their colliders exist to be shown.
+export const PROPS_ENABLED = true;
 
 // ── Vignette anchors ──────────────────────────────────────────────────
 // "Someone parked their music ride": skateboard flat on its wheels in

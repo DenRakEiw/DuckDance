@@ -56,7 +56,8 @@ cd F:\Duck\app && npm run build
 `.claude/launch.json` defines a `duckdance` preview server on port 5173.
 
 `?boot=1` skips the title card. `?ghosts=1` re-enables pose broadcasting,
-`?ball=1` re-enables the kickable ball.
+`?ball=1` re-enables the kickable ball, `?props=1` boots with the room
+up (there is also a switch for it in the dance panel).
 Debug handles in the console: `window.rl` (sim internals, upstream),
 `window.__store` (sim UI state, upstream), `window.__gameApi` (upstream +
 our `dance` surface), `window.__danceStore` (ours).
@@ -71,11 +72,14 @@ from the Space if you need to diff).
 Upstream code we touched, and only this:
 
 - `src/game/game.js` — registers a `DanceSource` ahead of the other input
-  sources, adds `gameApi.dance`, and gates the multiplayer ghosts and the
-  kickable ball.
+  sources, adds `gameApi.dance`, and gates the multiplayer ghosts, the
+  kickable ball and the prop room.
 - `src/ui/TitleMenu.jsx` — `closeMenu` exported so the play button can
   walk the duck in.
 - `src/main.jsx` — renders `DuckDanceApp` instead of `App`.
+- `src/game/props.js` — one line: `PROPS_ENABLED` flipped to true. It no
+  longer decides whether the room is SEEN, only whether the props and
+  their colliders exist; game.js owns the runtime gate.
 
 Everything else under `src/game/` and `src/ui/` is upstream. Keep it that
 way; it makes pulling upstream changes tractable.
@@ -316,6 +320,16 @@ priced together with the stand that ends it.
   stays in the model because the keyframe layout counts on its 7
   free-joint values. The kick policies never read its position anyway.
   `?ball=1`.
+- **The room is off by default, and switchable at runtime.** Upstream's
+  prop library (a 90s bedroom: arcade cabinet, skateboard, walkman, lava
+  lamp, dartboard) sits behind a build-time constant, which cannot serve
+  a control the user flicks. The awkward half is that a prop is two
+  things: a GLB in the three.js scene, easy to hide, and a static
+  collision box compiled into the MuJoCo model, which cannot be added or
+  removed afterwards. So the colliders are always compiled in and parked
+  20 m below the floor when the room is off — the same trick the relief
+  terraces and the ball already use. Nothing is rebuilt and the duck
+  never walks into an invisible arcade cabinet.
 - **Clips below 15% tracked are rejected**, not turned into a routine
   built on noise.
 - **Local MediaPipe.** wasm and both `.task` models are vendored under

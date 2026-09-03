@@ -68,6 +68,13 @@ export default function DanceLab() {
 
   const s = useDance();
   const bootDone = useGame((g) => g.bootDone);
+  // The room switch lives in the simulator, so its state is mirrored here
+  // rather than read during render: the sim is not a React store and a
+  // change in it would not re-render this panel on its own.
+  const [roomOn, setRoomOn] = useState(false);
+  useEffect(() => {
+    if (bootDone) setRoomOn(!!gameApi.dance?.roomOn);
+  }, [bootDone]);
   const entered = useGame((g) => g.entered);
   const menuOpen = useGame((g) => g.menuOpen);
 
@@ -554,6 +561,15 @@ export default function DanceLab() {
               <Note>Flip a head axis if the duck nods when the dancer shakes.</Note>
             </Box>
           )}
+        </Panel>
+      )}
+
+      {/* ── The room ─────────────────────────────────────────────── */}
+      {bootDone && (
+        <Panel title="The room" dense>
+          <Toggle label="90s bedroom" checked={roomOn}
+            onChange={(v) => { gameApi.dance?.setRoom?.(v); setRoomOn(v); }}
+            hint="arcade cabinet, skateboard and boombox, CRT, walkman, lava lamp" />
         </Panel>
       )}
 
