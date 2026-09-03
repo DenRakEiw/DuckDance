@@ -42,6 +42,55 @@ function TransportButton({ children, onClick, active, wide, title }) {
   );
 }
 
+// What a song looks like when there is no dancer to show.
+//
+// The blocks are the sections the analysis found, coloured by how loud
+// each one is, because that is exactly what decides how big the duck
+// dances there. Seeing the routine change at a block edge is the quickest
+// way to tell whether the structure was read correctly.
+const SECTION_TINT = {
+  peak: "rgba(255,122,0,0.55)",
+  groove: "rgba(0,214,214,0.34)",
+  calm: "rgba(255,255,255,0.10)",
+};
+
+function SongMap({ music, currentTime, duration }) {
+  const secs = music?.sections ?? [];
+  const dur = duration || music?.duration || 1;
+  return (
+    <Box sx={{ position: "absolute", inset: 0, display: "flex",
+      flexDirection: "column", justifyContent: "center", px: 2.5, gap: 1.2 }}>
+      <Box sx={{ fontFamily: MONO, fontSize: "0.62rem",
+        color: "rgba(255,255,255,0.42)", letterSpacing: "0.06em" }}>
+        {music ? `${Math.round(music.bpm)} BPM · ${music.bars.length} bars · ${secs.length} section${secs.length === 1 ? "" : "s"}` : "listening"}
+      </Box>
+      <Box sx={{ position: "relative", height: 54, display: "flex",
+        border: "1px solid rgba(255,255,255,0.16)" }}>
+        {secs.map((sec) => (
+          <Box key={sec.index}
+            title={`${sec.kind}, bars ${sec.i0 + 1}-${sec.i1}`}
+            sx={{
+              width: `${((sec.t1 - sec.t0) / dur) * 100}%`,
+              background: SECTION_TINT[sec.kind] ?? SECTION_TINT.groove,
+              borderRight: "1px solid rgba(0,0,0,0.5)",
+              display: "flex", alignItems: "flex-end",
+            }}>
+            <Box sx={{ fontFamily: MONO, fontSize: "0.52rem", p: 0.4,
+              color: "rgba(255,255,255,0.7)" }}>{sec.kind}</Box>
+          </Box>
+        ))}
+        <Box sx={{ position: "absolute", top: 0, bottom: 0,
+          left: `${Math.min(100, (currentTime / dur) * 100)}%`,
+          width: 2, background: "#fff", opacity: 0.85 }} />
+      </Box>
+      <Box sx={{ fontFamily: MONO, fontSize: "0.58rem",
+        color: "rgba(255,255,255,0.3)" }}>
+        No video. The routine is choreographed from the music.
+      </Box>
+    </Box>
+  );
+}
+
 export default function Stage({ media, onSeek, onTogglePlay }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -50,6 +99,8 @@ export default function Stage({ media, onSeek, onTogglePlay }) {
 
   const videoUrl = useDance((s) => s.videoUrl);
   const isDemo = useDance((s) => s.isDemo);
+  const isAudio = useDance((s) => s.isAudio);
+  const music = useDance((s) => s.music);
   const frames = useDance((s) => s.frames);
   const currentTime = useDance((s) => s.currentTime);
   const duration = useDance((s) => s.duration);
@@ -112,16 +163,19 @@ export default function Stage({ media, onSeek, onTogglePlay }) {
       >
         {videoUrl && !isDemo && (
           <Box
-            component="video"
+            component={isAudio ? "audio" : "video"}
             ref={videoRef}
             src={videoUrl}
             muted={false}
             playsInline
-            sx={{
+            sx={isAudio ? { display: "none" } : {
               width: "100%", height: "100%", objectFit: "contain",
               transform: mirror ? "scaleX(-1)" : "none",
             }}
           />
+        )}
+        {isAudio && (
+          <SongMap music={music} currentTime={currentTime} duration={duration} />
         )}
         {isDemo && (
           <Box sx={{ fontFamily: MONO, fontSize: "0.66rem",

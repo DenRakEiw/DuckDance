@@ -236,7 +236,23 @@ export function detectMoves(f, calib, tuning = {}, beats = []) {
     }
   }
 
-  // ── Scheduling ──
+  return scheduleCandidates(candidates, duration, T, debug);
+}
+
+/**
+ * Turn move candidates into a routine the duck has time to perform.
+ *
+ * Split out of detectMoves because the music choreographer needs exactly
+ * the same arithmetic: it proposes accents of its own and they compete
+ * against the same budget, by the same rule.
+ *
+ * @param {Array<{t:number,type:string,strength:number,rule:string}>} candidates
+ * @param {number} duration  seconds of routine
+ * @param {object} T         move tuning, already merged with the defaults
+ * @param {object} debug     optional bag the caller wants the numbers in
+ */
+export function scheduleCandidates(candidates, duration, tuning = {}, debug = {}) {
+  const T = { ...DEFAULT_MOVE_TUNING, ...tuning };
   //
   // The duck has a fixed amount of time it can spend NOT dancing, and
   // every skill spends some of it. The old scheduler simply walked the

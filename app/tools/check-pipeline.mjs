@@ -15,6 +15,8 @@ import { detectMoves, OCCUPANCY } from "../src/dance/moves.js";
 import { retargetPhrased, phraseGrid } from "../src/dance/phrase.js";
 import { onsetEnvelope, estimateTempo, beatGrid, analyseBuffer } from "../src/dance/beat.js";
 import { stampClock } from "../src/dance/stamp.js";
+import { analyseMusic } from "../src/dance/beat.js";
+import { choreograph } from "../src/dance/choreograph.js";
 
 let failures = 0;
 const results = [];
@@ -414,6 +416,207 @@ ok("the routine yields moves", events.length > 0, `${events.length} events, ${re
   // Separate landmarkers share nothing: a fresh one starts from zero.
   const fresh = stampClock({});
   ok("a fresh landmarker starts from zero", fresh(0) === 0);
+}
+
+// ── Level 6: choreography from music ───────────────────────────────────
+//
+// The music path has no dancer to fall back on, so everything it produces
+// has to be justified by the song alone. These checks pin the three
+// claims it makes: that it reads the structure, that it dances to it, and
+// that everything it writes is inside what the policy can perform.
+{
+  // A synthetic song. Kick on every beat, backbeat on one and three so
+  // the downbeat is findable, and a loud second half so there is a
+  // section boundary to find. Deterministic noise: a test that resamples
+  // its own fixture is a test that fails on Tuesdays.
+  let seed = 12345;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const makeSong = ({ bpm = 124, duration = 48, quietFirstHalf = true } = {}) => {
+    const sr = 22050, n = Math.round(sr * duration);
+    const sig = new Float32Array(n);
+    const beat = 60 / bpm;
+    for (let i = 0; i * beat < duration; i++) {
+      const t = i * beat, at = Math.round(t * sr);
+      const loud = !quietFirstHalf || t > duration / 2 ? 1 : 0.45;
+      for (let k = 0; k < sr * 0.09; k++) {
+        if (at + k < n) {
+          sig[at + k] += Math.sin(2 * Math.PI * 55 * k / sr) *
+            Math.exp(-k / (sr * 0.03)) * loud;
+        }
+      }
+      if (i % 4 === 0 || i % 4 === 2) {
+        for (let k = 0; k < sr * 0.05; k++) {
+          if (at + k < n) {
+            sig[at + k] += (rand() * 2 - 1) * Math.exp(-k / (sr * 0.015)) * 0.5 * loud;
+          }
+        }
+      }
+    }
+    return { sampleRate: sr, length: n, duration, numberOfChannels: 1,
+      getChannelData: () => sig };
+  };
+
+  const music = analyseMusic(makeSong());
+  ok("music analysis finds the tempo", Math.abs(music.bpm - 124) < 2,
+    `${music.bpm.toFixed(1)} BPM`);
+  ok("the bar grid covers the song",
+    music.bars.length >= 20 && music.bars.length <= 24, `${music.bars.length} bars`);
+
+  // Every bar must start on a beat of the grid, or a figure written for
+  // the one lands somewhere else entirely.
+  {
+    const onGrid = music.bars.every((b) =>
+      music.beats.some((t) => Math.abs(t - b.t0) < 1e-6));
+    ok("every bar starts on a beat", onGrid);
+  }
+
+  // The backbeat was written onto every other beat, so the meter search
+  // has something real to find and must commit to it.
+  ok("the downbeat search commits to a phase", music.meterConfidence > 0.1,
+    `phase ${music.phase}, confidence ${music.meterConfidence.toFixed(2)}`);
+
+  // The song gets loud halfway through; that is a boundary, and it is the
+  // only one.
+  ok("the loud half is found as its own section", music.sections.length === 2,
+    music.sections.map((s) => `${s.kind}@${s.t0.toFixed(0)}s`).join(" "));
+  if (music.sections.length === 2) {
+    ok("the boundary sits near the change",
+      Math.abs(music.sections[1].t0 - 24) < 5,
+      `${music.sections[1].t0.toFixed(1)}s vs 24s`);
+    ok("the loud half is ranked louder",
+      music.sections[1].level > music.sections[0].level);
+  }
+
+  const { track, plan } = choreograph(music);
+  // Skills are off by default because they put the duck down; the
+  // checks below are about what they do when someone opts in.
+  const { events } = choreograph(music, { enableSkills: true });
+
+  // ── What the duck is asked to do ──
+  {
+    let worst = null;
+    const bounds = [
+      ["vx", CH.VX, LIMITS.vxBack, LIMITS.vxFwd],
+      ["vy", CH.VY, -LIMITS.vy, LIMITS.vy],
+      ["wz", CH.WZ, -LIMITS.wz, LIMITS.wz],
+      ["neck", CH.NECK_PITCH, -LIMITS.head, LIMITS.head],
+      ["pitch", CH.HEAD_PITCH, -LIMITS.head, LIMITS.head],
+      ["yaw", CH.HEAD_YAW, -LIMITS.head, LIMITS.head],
+      ["roll", CH.HEAD_ROLL, -LIMITS.head, LIMITS.head],
+    ];
+    for (let i = 0; i < track.n; i++) {
+      for (const [name, ch, lo, hi] of bounds) {
+        const v = track.data[i * NUM_CH + ch];
+        if (v < lo - 1e-6 || v > hi + 1e-6) worst = `${name}=${v.toFixed(3)}`;
+      }
+    }
+    ok("every command is inside the policy limits", worst === null, worst ?? "");
+  }
+  ok("the track fits the slew budget by construction", track.fit.demand <= 1.0001,
+    `${track.fit.demand.toFixed(3)}x the limit`);
+
+  // Holding a turn near the limit is what puts the duck on the floor.
+  {
+    let worst = 0;
+    for (let i = 0; i < track.n; i++) {
+      worst = Math.max(worst, Math.abs(track.data[i * NUM_CH + CH.WZ]));
+    }
+    ok("sustained turns stay under the ceiling", worst <= LIMITS.wz * 0.8 + 1e-6,
+      `${worst.toFixed(2)} rad/s`);
+  }
+
+  // A routine of velocity commands can quietly walk the duck into a wall.
+  {
+    let x = 0, y = 0;
+    for (let i = 0; i < track.n; i++) {
+      x += track.data[i * NUM_CH + CH.VX] * TRACK_DT;
+      y += track.data[i * NUM_CH + CH.VY] * TRACK_DT;
+    }
+    const travel = Math.hypot(x, y);
+    ok("dancing on the spot stays on the spot", travel < 1.2,
+      `net travel ${travel.toFixed(2)} m over ${music.duration} s`);
+  }
+
+  // A routine that never moves passes every check above and is useless.
+  {
+    const swings = (ch) => {
+      let c = 0;
+      for (let i = 1; i < track.n; i++) {
+        const a = track.data[(i - 1) * NUM_CH + ch], b = track.data[i * NUM_CH + ch];
+        if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) c++;
+      }
+      return c;
+    };
+    ok("the body actually moves", swings(CH.VY) + swings(CH.WZ) > 10,
+      `${swings(CH.VY)} sway + ${swings(CH.WZ)} turn direction changes`);
+    ok("the head keeps its own faster rhythm",
+      swings(CH.HEAD_PITCH) + swings(CH.HEAD_YAW) > swings(CH.WZ),
+      `${swings(CH.HEAD_PITCH) + swings(CH.HEAD_YAW)} head vs ${swings(CH.WZ)} body`);
+  }
+
+  // ── Structure: the one thing separating choreography from noise ──
+  {
+    const first = music.sections[0];
+    const inFirst = plan.filter((p) => p.section.index === first.index);
+    const names = inFirst.map((p) => `${p.body.name}/${p.head.name}`);
+    // A motif of two or four bars, stated more than once.
+    const period = names.length >= 8 ? 4 : 2;
+    let repeats = 0;
+    for (let i = period; i < names.length; i++) {
+      if (names[i] === names[i - period]) repeats++;
+    }
+    ok("a motif repeats through a section",
+      repeats >= (names.length - period) * 0.6,
+      `${repeats}/${names.length - period} bars repeat at period ${period}`);
+
+    if (music.sections.length === 2) {
+      const secondNames = plan
+        .filter((p) => p.section.index === 1)
+        .map((p) => `${p.body.name}/${p.head.name}`);
+      const shared = new Set(names.slice(0, 4));
+      const same = secondNames.slice(0, 4).filter((x) => shared.has(x)).length;
+      ok("the figures change at the section boundary", same < 4,
+        `${same}/4 opening bars shared with the first section`);
+    }
+  }
+
+  // ── Skills ──
+  ok("skills are off unless asked for", choreograph(music).events.length === 0);
+  ok("kicks land in the loud section, not the quiet one",
+    events.every((e) => !e.type.startsWith("kick") || e.t > 20),
+    events.map((e) => `${e.type}@${e.t.toFixed(0)}`).join(" ") || "(none)");
+  {
+    const feet = events.filter((e) => e.type.startsWith("kick")).map((e) => e.type);
+    const alternates = feet.every((f, i) => i === 0 || f !== feet[i - 1]);
+    ok("the duck alternates feet", alternates, feet.join(" ") || "(no kicks)");
+  }
+
+  // ── Determinism: a tuning slider is unjudgeable without it ──
+  {
+    const a = choreograph(music).track.data;
+    const b = choreograph(music).track.data;
+    let same = a.length === b.length;
+    for (let i = 0; same && i < a.length; i++) if (a[i] !== b[i]) same = false;
+    ok("the same song gives the same routine", same);
+    const c = choreograph(music, { seed: 7 }).track.data;
+    let differs = false;
+    for (let i = 0; i < c.length; i++) if (c[i] !== a[i]) { differs = true; break; }
+    ok("a different seed gives a different routine", differs);
+  }
+
+  // ── A song with no beat at all still has to produce something ──
+  {
+    const silent = { sampleRate: 22050, length: 22050 * 20, duration: 20,
+      numberOfChannels: 1, getChannelData: () => new Float32Array(22050 * 20) };
+    const m2 = analyseMusic(silent);
+    const t2 = choreograph(m2).track;
+    ok("silence still yields a performable routine",
+      t2.n > 100 && t2.fit.demand <= 1.0001 && t2.fit.gridSource === "invented",
+      `${t2.n} steps, ${t2.fit.demand.toFixed(2)}x, grid ${t2.fit.gridSource}`);
+  }
 }
 
 const w = Math.max(...results.map((r) => r[1].length));

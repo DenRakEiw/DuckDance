@@ -6,8 +6,9 @@ change the code.
 
 ## What this is
 
-A web app: dance video on the left, a Microduck robot dancing to it on the
-right. Everything runs in the browser, the video never leaves the machine.
+A web app: a dance video or a song on the left, a Microduck robot dancing
+to it on the right. Everything runs in the browser, the file never leaves
+the machine.
 
 - Repo: https://github.com/DenRakEiw/DuckDance (private), remote `origin`, branch `main`
 - Working dir: `F:\Duck`, app lives in `F:\Duck\app`
@@ -106,10 +107,15 @@ beat at 125 BPM is 0.48 s.
 
 ```
 video ──► capture ──► features ──► retarget | phrase ──► track ──► player ──► DanceSource ──► sim
-                          │                                          ▲
-                          └──► moves ──► scheduled skills ───────────┘
-audio ──► beat ──► tempo, beat grid ──────────────────────────────────┘
+                          │                              ▲   ▲
+                          └──► moves ──► skills ─────────┘   │
+audio ──► beat ──► tempo, bars, sections ──► choreograph ────┘
 ```
+
+Three ways to a track, and they all end at the same `player`. That seam is
+what made the music path cheap: everything to the right of `track` — the
+policy limits, the slew limiter, the budget-aware skill scheduler, the
+player, the tests — was already there and is shared.
 
 `src/dance/`:
 
@@ -121,7 +127,8 @@ audio ──► beat ──► tempo, beat grid ──────────�
 | `retarget.js` | Direct path: every frame → a command, rate limiter discards the rest |
 | `phrase.js` | Phrased path (**the default**): builds a command that fits by construction |
 | `moves.js` | Kick / bow / sit detection and budget-aware scheduling |
-| `beat.js` | Spectral flux onsets → tempo → beat grid. Pure, testable under node. |
+| `beat.js` | Spectral flux onsets → tempo → beat grid → downbeat, bars, sections, band energy. Pure, testable under node. |
+| `choreograph.js` | The music path: figures written onto the bar grid, no dancer involved |
 | `player.js` | Video time in, duck commands out |
 | `clock.js` | Stand-in for a video element, for the built-in routine |
 | `DanceSource.js` | Presents all of it to the sim as one more input device |
@@ -181,9 +188,11 @@ aliased catastrophically: the demo dancer's head swings once per phrase,
 every sample landed on the same side, and both channels froze at their
 limit. `renderHead()` runs it on the dancer's own clock.
 
-## The two retargeting paths
+## The three paths to a track
 
-`tuning.mode` selects; `"phrase"` is the default.
+`tuning.mode` selects. `"phrase"` is the default for a video; a song
+uploaded on its own forces `"music"`, and so does a video the tracker
+cannot use.
 
 **Direct** (`retarget.js`) maps every frame and lets the slew limiter sort
 it out. Faithful on a slow clip. On a 125 BPM phone clip it was clipping
@@ -205,6 +214,44 @@ nothing discarded; body direction changes drop 89 → 13; head keeps 41 of
 `sustainedCeiling` (0.8) exists because the phrased path **holds** targets
 where the direct path only spikes. Holding a turn near the policy limit
 for two thirds of a second is what put the duck on the floor.
+
+**From the music** (`choreograph.js`) uses no dancer at all. The case for
+it is the same arithmetic as above, taken one step further: whatever the
+input, the duck performs about one gesture per beat and a handful of
+targets per bar, so a whole song is a few hundred numbers. A human dancer
+is an expensive way to produce a few hundred numbers, and every one of
+them arrives blurred by tracking noise.
+
+Three ideas carry it:
+
+- **Bars, not frames.** Figures are authored on the bar grid, so they
+  begin on the one. `beat.js` finds the downbeat by scoring each candidate
+  phase against how hard the beats falling on it are hit.
+- **Repetition, then change.** A motif of two or four bars repeats through
+  a section and is replaced at the section boundary, with a busier fill on
+  the last bar of every second repeat. This is the rule that separates
+  choreography from a random walk: a repeated figure reads as intent. The
+  section boundaries come from a novelty curve over per-bar band energy,
+  snapped to a four-bar multiple because that is where songs actually
+  change.
+- **Fit by construction**, exactly as the phrased path does it. Measured
+  demand is 0.998x the limit with nothing discarded.
+
+The figure library is deliberately one small table at the top of the file
+with `energy` and `travel` on each entry. It is the only part where taste
+rather than arithmetic decides, so it is the part worth rewriting or
+A/B-ing against a different author. Everything else is renderer.
+
+The RNG is seeded, so a song always produces the same routine. Without
+that a tuning knob is unjudgeable and a test is unwritable.
+
+**Skills are off by default here**, and this is the measurement that
+decided it. A 40 s test routine with kicks scheduled on the loud accents
+put the duck on the floor at 25.5 s — 0.2 s after the first kick — and
+again at every kick after that; `wz` was zero in the second before each
+fall, so it is the kick, not a sustained turn. The identical routine with
+`enableSkills: false` ran the full 40 s with the trunk never leaving
+upright (worst 0.998 of vertical) and no net drift. The UI toggle says so.
 
 ## Moves
 
@@ -244,10 +291,12 @@ priced together with the stand that ends it.
 ## Testing
 
 `tools/check-features.mjs` (31 checks) pins the sign conventions using the
-synthetic dancer. `tools/check-pipeline.mjs` (52 checks) covers the track
+synthetic dancer. `tools/check-pipeline.mjs` (73 checks) covers the track
 staying inside the policy limits, the slew limiter, phrased output fitting
 by construction, move scheduling and budget, the beat analyser against a
-synthetic click track, and the capture timestamps rising across clips. Both run under node; no browser, no video.
+synthetic click track, the capture timestamps rising across clips, and
+the music path end to end: meter, sections, limits, slew, net travel,
+motif repetition, change at the boundary, and determinism. Both run under node; no browser, no video.
 
 The browser pane in this environment throttles rAF hard, so the sim's
 render loop and the entrance ceremony only advance while screenshots force
@@ -263,15 +312,27 @@ sandbox's skills and being refused while it is busy; tempo from a real MP4
 to within 0.1%; a real 44 s phone clip tracked 100% at 125.7 BPM; a clip
 with no dancer failing cleanly.
 
-Not verified: the phrased path against real footage. That is the next
-thing to do, and the comparison to ask the user for is phrased vs frame by
-frame on their own clip.
+Verified in the browser for the music path: a 40 s song end to end
+through decode, analysis, choreography and the sim, with the duck upright
+throughout and every channel inside the policy limits.
+
+Not verified: the phrased path against real footage, and the music path
+against a real song rather than a synthetic one. The synthetic fixture has
+an unnaturally clean beat and exactly one section change; a real mix will
+test the novelty curve much harder.
 
 Open:
 
-- The duck still goes over about three times in the 24 s demo, nearly
-  always around a kick. Upstream calls its kicks blind one-shot boots.
-  Turning kicks off makes the routine stable.
+- Kicks put the duck on the floor. Upstream calls them blind one-shot
+  boots; they take no account of the gait they interrupt. Measured on the
+  music path: down 0.2 s after the first kick, every time. The music path
+  defaults them off and is rock solid without them; the video path still
+  detects and schedules them, and still goes over about three times in the
+  24 s demo.
+- The music path's quiet sections hold the body still for a quarter to a
+  half of their bars, with only the head moving. That is deliberate
+  contrast and it is also the first thing to revisit if a routine reads as
+  lazy: raise the floor of `want` in `planSection`.
 - The beat grid is a constant tempo and will not follow a clip that
   changes speed.
 - Depth from one camera is weak; forward motion leans on step cadence.

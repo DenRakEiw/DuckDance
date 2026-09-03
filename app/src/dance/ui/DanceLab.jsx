@@ -253,11 +253,12 @@ export default function DanceLab() {
       </Box>
 
       {/* ── Source ─────────────────────────────────────────────────── */}
-      <Panel title="1. The video" right={s.fileName || undefined}>
+      <Panel title={s.isAudio ? "1. The song" : "1. The video"}
+        right={s.fileName || undefined}>
         <Row>
           <ComicButton size="xs" scheme="orange" onDark
             onClick={() => fileRef.current?.click()}>
-            Choose a video
+            Choose a file
           </ComicButton>
           <ComicButton size="xs" scheme="paper" variant="outline" onDark
             onClick={() => { stopPlayback(); loadDemo(); }}>
@@ -276,7 +277,7 @@ export default function DanceLab() {
             </ComicButton>
           )}
         </Row>
-        <Box component="input" ref={fileRef} type="file" accept="video/*"
+        <Box component="input" ref={fileRef} type="file" accept="video/*,audio/*"
           onChange={(e) => pickFile(e.target.files?.[0])}
           sx={{ display: "none" }} />
 
@@ -290,14 +291,17 @@ export default function DanceLab() {
             <Note>{s.progressLabel}</Note>
           </Box>
         )}
-        {s.stage === "error" && <Note tone="bad">Could not use this clip: {s.error}</Note>}
+        {s.stage === "error" && <Note tone="bad">Could not use this file: {s.error}</Note>}
+        {ready && s.sourceNote && <Note tone="warn">{s.sourceNote}</Note>}
         {s.stage === "idle" && (
           <Note>
-            Drop a clip anywhere in this panel. It is analysed on your machine
-            and never uploaded. One dancer, full body in frame, works best.
+            Drop a clip or a song anywhere in this panel. It is analysed on
+            your machine and never uploaded. A video is copied from the
+            dancer in it; a song is choreographed from its beat and
+            structure, with no dancer needed.
           </Note>
         )}
-        {ready && (
+        {ready && s.features && (
           <Note tone={s.trackedFraction < 0.7 ? "warn" : "dim"}>
             {Math.round(s.trackedFraction * 100)}% of frames tracked
             {s.bpm ? `, ${s.bpm.toFixed(1)} BPM` : ", no beat found"}
@@ -305,11 +309,20 @@ export default function DanceLab() {
             {s.trackedFraction < 0.7 && " — the duck will be vague where the dancer was lost."}
           </Note>
         )}
+        {ready && !s.features && s.music && (
+          <Note>
+            {s.bpm.toFixed(1)} BPM, {s.music.bars.length} bars,{" "}
+            {s.music.sections.length} section{s.music.sections.length === 1 ? "" : "s"}
+            {s.music.meterConfidence < 0.1
+              ? " — no clear downbeat, so figures start on the first beat found."
+              : ""}
+          </Note>
+        )}
       </Panel>
 
       {/* ── Stage ──────────────────────────────────────────────────── */}
-      <Panel title="2. The dancer" accent={ACID_CYAN}
-        right={ready ? `${s.frames?.length ?? 0} frames` : undefined}>
+      <Panel title={s.isAudio ? "2. The song" : "2. The dancer"} accent={ACID_CYAN}
+        right={ready && s.frames ? `${s.frames.length} frames` : undefined}>
         <Stage media={media} onSeek={seek} onTogglePlay={togglePlay} />
         {!bootDone && (
           <Note tone="warn">The simulator on the right is still booting.</Note>
@@ -326,11 +339,15 @@ export default function DanceLab() {
       {/* ── Speed ──────────────────────────────────────────────────── */}
       {ready && s.track?.fit && (
         <Panel title="3. Speed and phrasing" accent={COMIC_YELLOW}
-          right={s.track.mode === "phrase"
+          right={s.track.mode === "music"
+            ? `${s.track.bars?.length ?? 0} bars`
+            : s.track.mode === "phrase"
             ? `${s.track.phrases?.length ?? 0} phrases`
             : `duck needs ${s.track.fit.demand.toFixed(1)}x longer`}>
           <Row gap={0.6}>
-            {[["phrase", "Phrased"], ["direct", "Frame by frame"]].map(([m, label]) => (
+            {[["phrase", "Phrased"], ["direct", "Frame by frame"], ["music", "From the music"]]
+              .filter(([m]) => m === "music" || !!s.features)
+              .map(([m, label]) => (
               <Box key={m} onClick={() => setTuning({ mode: m })}
                 sx={{ cursor: "pointer", fontFamily: MONO, fontSize: "0.62rem",
                   px: 1, py: 0.35,
@@ -342,7 +359,9 @@ export default function DanceLab() {
             ))}
           </Row>
           <Note>
-            {s.tuning.mode === "phrase"
+            {s.tuning.mode === "music"
+              ? `From the music: no dancer involved. Figures are written onto the bar grid and a motif repeats through each section, changing where the song changes. ${s.track.fit.sections ?? 1} section${(s.track.fit.sections ?? 1) === 1 ? "" : "s"} found.`
+              : s.tuning.mode === "phrase"
               ? `Phrased: the body commits to one gesture per ${s.track.fit.beatsPerPhrase ?? 2} beats, which the duck can actually finish, while the head keeps following the dancer's own rhythm at whatever amplitude fits.`
               : "Frame by frame: every video frame becomes a command and the duck's rate limiter discards whatever it cannot follow. Faithful on a slow clip, mush on a fast one."}
           </Note>
@@ -363,7 +382,13 @@ export default function DanceLab() {
               Fit to the duck
             </ComicButton>
           </Row>
-          {s.tuning.mode === "phrase" ? (
+          {s.tuning.mode === "music" ? (
+            <Note>
+              Built to fit: every figure is checked against the duck's slew
+              budget before it is committed, so full speed works and nothing
+              is discarded.
+            </Note>
+          ) : s.tuning.mode === "phrase" ? (
             <Note>
               Built to fit: the command sits exactly on the duck's limits
               and nothing is discarded, so full speed works. Slowing down
@@ -429,7 +454,39 @@ export default function DanceLab() {
       )}
 
       {/* ── Tuning ─────────────────────────────────────────────────── */}
-      {ready && (
+      {/* The music path has no dancer to scale against, so its knobs are
+          about the routine itself rather than about how hard to copy
+          someone. Showing the tracking gains there would be showing dead
+          controls. */}
+      {ready && s.tuning.mode === "music" && (
+        <Panel title="6. Tuning">
+          <Knob label="Size" value={s.tuning.intensity} min={0.3} max={1.6}
+            onChange={(v) => setTuning({ intensity: v })}
+            hint="how big every figure is, before the loud parts get their extra" />
+          <Knob label="Body" value={s.tuning.gainBody} min={0} max={1.6}
+            onChange={(v) => setTuning({ gainBody: v })} />
+          <Knob label="Head" value={s.tuning.gainHead} min={0} max={1.6}
+            onChange={(v) => setTuning({ gainHead: v })} />
+          <Knob label="Variety" value={s.tuning.variation} min={0} max={2}
+            onChange={(v) => setTuning({ variation: v })}
+            hint="0 keeps one motif for the whole song; higher reaches further from what the section asks for" />
+          <Knob label="Routine" value={s.tuning.seed} min={1} max={40} step={1}
+            onChange={(v) => setTuning({ seed: Math.round(v) })}
+            format={(v) => `#${Math.round(v)}`}
+            hint="a different number is a different choreography for the same song" />
+          <Box sx={{ mt: 1.2 }}>
+            <Toggle label="Kicks and bows on the loudest hits"
+              checked={s.tuning.enableSkills}
+              onChange={(v) => setTuning({ enableSkills: v })} />
+            <Note tone={s.tuning.enableSkills ? "warn" : "dim"}>
+              {s.tuning.enableSkills
+                ? "The sandbox's kicks are blind one-shot boots that ignore the gait they interrupt. In a 40 s test the duck went down 0.2 s after the first one, and at every kick after it."
+                : "Off: the duck stayed upright through a whole 40 s routine with these off, and went over at every kick with them on."}
+            </Note>
+          </Box>
+        </Panel>
+      )}
+      {ready && s.tuning.mode !== "music" && (
         <Panel title="6. Tuning">
           <Knob label="Turning" value={s.tuning.gainTurn} min={0} max={2} onChange={(v) => setTuning({ gainTurn: v })} />
           <Knob label="Sideways sway" value={s.tuning.gainSway} min={0} max={2} onChange={(v) => setTuning({ gainSway: v })} />

@@ -13,7 +13,8 @@ import { extractFeatures } from "./features.js";
 import { retarget, calibrate, DEFAULT_TUNING } from "./retarget.js";
 import { retargetPhrased, DEFAULT_PHRASE_TUNING } from "./phrase.js";
 import { detectMoves, DEFAULT_MOVE_TUNING } from "./moves.js";
-import { decodeAudio, analyseBuffer } from "./beat.js";
+import { decodeAudio, analyseMusic } from "./beat.js";
+import { choreograph, DEFAULT_MUSIC_TUNING } from "./choreograph.js";
 import { DEFAULT_PLAYBACK } from "./player.js";
 import { synthRoutine } from "./synth.js";
 
@@ -26,6 +27,7 @@ export const useDance = create(() => ({
   fileName: "",
   videoUrl: "",
   isDemo: false,
+  isAudio: false,   // a song rather than a clip: no camera, no dancer
 
   // Analysis lifecycle
   stage: "idle", // idle | loading | tracking | audio | building | ready | error
@@ -45,12 +47,17 @@ export const useDance = create(() => ({
   bpmConfidence: 0,
   trackedFraction: 0,
   captureInfo: null,
+  music: null,      // tempo, bars and sections, from beat.js
+  sourceNote: "",   // why the routine came from where it did
 
   // Controls
   // One tuning object serves both retargeting paths: the gains, the
   // mirror and the head polarities mean the same thing in each, so
   // switching mode keeps whatever the user has dialled in.
-  tuning: { ...DEFAULT_TUNING, ...DEFAULT_PHRASE_TUNING, mode: "phrase" },
+  tuning: {
+    ...DEFAULT_TUNING, ...DEFAULT_PHRASE_TUNING, ...DEFAULT_MUSIC_TUNING,
+    mode: "phrase",
+  },
   moveTuning: { ...DEFAULT_MOVE_TUNING },
   playback: { ...DEFAULT_PLAYBACK },
   captureOpts: { model: "full", targetFps: 30, maxDuration: 90, mode: "auto" },
@@ -78,7 +85,15 @@ let abortCtl = null;
 // Rebuild everything downstream of the captured frames. Cheap enough to
 // run on every slider move.
 export function rebuild() {
-  const { features, tuning, moveTuning, beats } = get();
+  const { features, music, tuning, moveTuning, beats } = get();
+  // The music path needs no dancer at all, so it is checked first: a song
+  // uploaded on its own has no features and never will.
+  if (tuning.mode === "music") {
+    if (!music) return;
+    const r = choreograph(music, tuning, moveTuning);
+    set({ track: r.track, events: r.events, rejected: r.rejected });
+    return { track: r.track, events: r.events };
+  }
   if (!features) return;
   // "phrase" builds a command the duck can perform; "direct" maps every
   // frame and lets the slew limiter sort it out. Direct is kept because
@@ -127,15 +142,37 @@ export async function analyseFile(file) {
   const prev = get().videoUrl;
   if (prev && !get().isDemo) URL.revokeObjectURL(prev);
   const url = URL.createObjectURL(file);
+  const isAudio = /^audio\//.test(file.type) ||
+    /\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i.test(file.name);
 
   set({
-    fileName: file.name, videoUrl: url, isDemo: false,
+    fileName: file.name, videoUrl: url, isDemo: false, isAudio,
     stage: "loading", progress: 0, progressLabel: "Reading the file",
-    error: "", frames: null, features: null, track: null,
-    events: [], rejected: [], beats: [], bpm: 0, eventLog: [],
+    error: "", frames: null, features: null, track: null, music: null,
+    events: [], rejected: [], beats: [], bpm: 0, eventLog: [], sourceNote: "",
   });
 
   try {
+    // The music is analysed first now, whatever the file is. It is quick
+    // next to tracking, both paths need the beat grid, and having it in
+    // hand is what lets a clip the tracker cannot use still become a
+    // routine instead of an apology.
+    set({ stage: "audio", progress: 0.05, progressLabel: "Listening for the beat" });
+    const music = await analyseAudio(file);
+    if (signal.aborted) return;
+    if (music) {
+      set({
+        music, beats: music.beats, bpm: music.bpm,
+        bpmConfidence: music.confidence, duration: music.duration,
+      });
+    }
+
+    if (isAudio) {
+      if (!music) throw new Error("the browser could not decode this audio");
+      finishMusic(music, "");
+      return;
+    }
+
     const video = await loadVideo(url);
     set({ duration: video.duration });
 
@@ -171,39 +208,64 @@ export async function analyseFile(file) {
     // A clip where the tracker almost never found a person cannot produce
     // a routine worth performing, and the arithmetic downstream would
     // happily build one anyway out of a handful of stray detections.
-    // Saying so is far more useful than a duck moving at random.
     const seen = capture.frames.filter((f) => f.landmarks).length / capture.frames.length;
     if (seen < MIN_TRACKED_FRACTION) {
+      // But there is usually still a song in there, and a routine built
+      // from the music is a far better answer than refusing the file.
+      if (get().music?.beats?.length) {
+        finishMusic(get().music,
+          `No dancer found in this clip (${Math.round(seen * 100)}% of frames), ` +
+          "so the routine was choreographed from the music instead.");
+        return;
+      }
       throw new Error(
-        `no dancer found in this clip (${Math.round(seen * 100)}% of frames). ` +
-        "One person, whole body in shot, reasonably lit works best.",
+        `no dancer found in this clip (${Math.round(seen * 100)}% of frames), ` +
+        "and no beat to choreograph to either. One person, whole body in " +
+        "shot, reasonably lit works best.",
       );
     }
 
-    // The audio is optional: plenty of clips are silent or use a codec
-    // this browser will not decode, and a routine without a beat grid is
-    // still a routine.
-    set({ stage: "audio", progress: 0.85, progressLabel: "Listening for the beat" });
-    let beats = [], bpm = 0, bpmConfidence = 0;
-    try {
-      const buf = await decodeAudio(await file.arrayBuffer());
-      if (buf) {
-        const a = analyseBuffer(buf);
-        // A weak estimate would drag moves onto beats that are not
-        // really there, so it is dropped rather than half-trusted.
-        if (a.confidence > 0.25 && a.bpm > 0) {
-          beats = a.beats; bpm = a.bpm; bpmConfidence = a.confidence;
-        }
-      }
-    } catch { /* no beat grid, carry on */ }
-    if (signal.aborted) return;
-
     set({ stage: "building", progress: 0.92, progressLabel: "Choreographing" });
+    const { beats, bpm, bpmConfidence } = get();
     finish(capture, beats, bpm, bpmConfidence);
   } catch (e) {
     if (signal.aborted) return;
     set({ stage: "error", error: e?.message || String(e), progress: 0 });
   }
+}
+
+/**
+ * Decode and analyse a file's soundtrack.
+ *
+ * Returns null when there is nothing usable: plenty of clips are silent
+ * or use a codec this browser will not decode, and a weak tempo estimate
+ * would drag every move onto beats that are not really there, so it is
+ * dropped rather than half-trusted.
+ */
+async function analyseAudio(file) {
+  try {
+    const buf = await decodeAudio(await file.arrayBuffer());
+    if (!buf) return null;
+    const m = analyseMusic(buf);
+    return m.confidence > 0.25 && m.bpm > 0 ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Build a routine out of the music alone and hand it to the player. */
+function finishMusic(music, note) {
+  set({ stage: "building", progress: 0.92, progressLabel: "Choreographing" });
+  set({ tuning: { ...get().tuning, mode: "music" } });
+  const r = choreograph(music, get().tuning, get().moveTuning);
+  set({
+    track: r.track, events: r.events, rejected: r.rejected,
+    music, beats: music.beats, bpm: music.bpm, duration: music.duration,
+    frames: null, features: null, calib: null, trackedFraction: 0,
+    sourceNote: note, stage: "ready", progress: 1,
+    progressLabel: `${music.bars.length} bars, ${r.track.fit.sections} sections, ` +
+      `${Math.round(music.bpm)} BPM`,
+  });
 }
 
 /** Load the built-in synthetic routine, so the duck can dance with no upload. */
@@ -241,7 +303,8 @@ export function reset() {
   const prev = get().videoUrl;
   if (prev && !get().isDemo) URL.revokeObjectURL(prev);
   set({
-    fileName: "", videoUrl: "", isDemo: false, stage: "idle", progress: 0,
+    fileName: "", videoUrl: "", isDemo: false, isAudio: false,
+    music: null, sourceNote: "", stage: "idle", progress: 0,
     progressLabel: "", error: "", frames: null, features: null, track: null,
     events: [], rejected: [], beats: [], bpm: 0, duration: 0, eventLog: [],
     playing: false, waitingForDuck: false, currentTime: 0, liveRow: null,
