@@ -90,8 +90,15 @@ holding a contorted head pose derived from two junk frames.
 
 Verified: the analysis chain, the command track staying inside the
 policy's limits, the duck dancing to the built-in routine, kicks firing
-through the sandbox's own skills, tempo recovered from a real MP4 to within
-0.1%, and a clip with no dancer failing cleanly.
+through the sandbox's own skills and being correctly refused while the
+duck is busy, tempo recovered from a real MP4 to within 0.1%, and a clip
+with no dancer failing cleanly.
+
+**The duck still falls over sometimes**, roughly once a minute on the
+built-in routine, usually on a hard turn. The sandbox's fall-recovery
+policy gets it back up on its own and the routine carries on, with
+commands held at zero in the meantime. Turning the sensitivity or the
+turn gain down makes it rarer.
 
 Not verified: tracking quality on real dance footage. That needs real
 clips, so treat the tuning defaults as a starting point rather than a

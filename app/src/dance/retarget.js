@@ -55,7 +55,7 @@ const RATE = { vx: 0.02, vy: 0.015, wz: 0.10, head: 0.09 };
 export const DEFAULT_TUNING = {
   // How hard each human signal drives its command slot. 1 means "a
   // typical move for this dancer reaches the duck's limit".
-  gainTurn: 1.0,     // body rotation -> wz
+  gainTurn: 0.85,    // body rotation -> wz
   gainSway: 1.0,     // sideways travel -> vy
   gainStride: 0.8,   // depth travel + step cadence -> vx
   gainHead: 1.0,     // head orientation -> head slots
@@ -196,7 +196,11 @@ export function retarget(f, tuning = {}) {
   const yawScale = Math.max(0.35, percentileAbs(yawRate, 0.9));
   const wzSrc = new Float32Array(f.n);
   for (let i = 0; i < f.n; i++) {
-    wzSrc[i] = clamp((yawRate[i] / yawScale) * T.gainTurn, -1.6, 1.6) * LIMITS.wz * mir;
+    // The headroom above 1 lets the dancer's biggest turns read as
+    // bigger, but a duck commanded to spin at its full rate for long
+    // enough loses its footing, and the fall costs several seconds of
+    // the routine. 1.25 keeps the accent without the tumble.
+    wzSrc[i] = clamp((yawRate[i] / yawScale) * T.gainTurn, -1.25, 1.25) * LIMITS.wz * mir;
   }
 
   // ── Sway: sideways travel across the frame, in torso lengths per

@@ -202,14 +202,24 @@ export function synthRoutine({ duration = 16, fps = 30, bpm = 100 } = {}) {
       headYaw: 0.35 * Math.sin(phase / 2),
       headPitch: 0.25 * Math.sin(phase),
       headRoll: 0.2 * Math.sin(phase / 2 + 0.6),
-      bodyYaw: bar === 2 ? 0.9 * Math.sin(phase / 8) : 0.15 * Math.sin(phase / 4),
+      // Kept deliberately moderate. This routine is the first thing a
+      // visitor sees, and an earlier, wilder version drove the turn
+      // command to its limit often enough to put the duck on the floor
+      // twice a minute -- technically a good test of fall recovery, and
+      // a terrible demonstration of dancing.
+      bodyYaw: bar === 2 ? 0.45 * Math.sin(phase / 8) : 0.12 * Math.sin(phase / 4),
       worldX: 0.25 * Math.sin(phase / 4),
       liftL: Math.max(0, 0.22 * Math.sin(phase)),
       liftR: Math.max(0, 0.22 * Math.sin(phase + Math.PI)),
       armL: 0.15 * Math.sin(phase / 2),
       armR: 0.15 * Math.sin(phase / 2 + Math.PI),
     };
-    if (bar === 1) { p.liftR = Math.max(p.liftR, 0.42 * Math.max(0, Math.sin(phase))); }
+    // One clear kick per bar rather than every beat: a kick occupies the
+    // duck for about a second, so a denser pattern only produces moves
+    // the scheduler then has to throw away.
+    if (bar === 1 && Math.floor(t / beat) % 4 === 0) {
+      p.liftR = Math.max(p.liftR, 0.42 * Math.max(0, Math.sin(phase)));
+    }
     if (bar === 3) { p.crouch = 0.22 * Math.max(0, Math.sin(phase / 8)); }
     frames.push({ t, ...synthPose(p) });
   }
