@@ -1,12 +1,15 @@
 {
-  "name": "microduck-sandbox",
+  "name": "duckdance",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node tools/check-features.mjs && node tools/check-pipeline.mjs",
+    "test:features": "node tools/check-features.mjs",
+    "test:pipeline": "node tools/check-pipeline.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

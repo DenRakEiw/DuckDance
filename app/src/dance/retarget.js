@@ -262,9 +262,17 @@ export function retarget(f, tuning = {}) {
     raw.hr[i] = clamp(nHeadRoll, -1.4, 1.4) * T.gainHead * T.signHeadRoll * LIMITS.head * mir;
     raw.neck[i] = clamp(nLean, -1.4, 1.4) * T.gainLean * T.signNeckPitch * LIMITS.head;
 
-    // Tracking gaps fade the twist out rather than freezing a stale one.
+    // Tracking gaps fade EVERY channel toward neutral rather than
+    // freezing a stale one. The head matters as much as the twist here:
+    // a held head angle does not read as "we lost the dancer", it reads
+    // as a deliberate instruction to stand there with a cocked head, and
+    // a clip the tracker only caught a couple of frames of would have the
+    // duck holding a pose derived from those two frames throughout.
     if (trackedRs[i] < 0.5) {
-      raw.vx[i] *= 0.2; raw.vy[i] *= 0.2; raw.wz[i] *= 0.2;
+      const fade = 0.2;
+      raw.vx[i] *= fade; raw.vy[i] *= fade; raw.wz[i] *= fade;
+      raw.hy[i] *= fade; raw.hp[i] *= fade;
+      raw.hr[i] *= fade; raw.neck[i] *= fade;
     }
   }
 

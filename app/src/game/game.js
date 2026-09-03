@@ -46,6 +46,7 @@ import { Controller } from "./controls/controller.js";
 import { KeyboardSource } from "./controls/keyboard.js";
 import { GamepadSource } from "./controls/gamepad.js";
 import { TouchSource } from "./controls/touch.js";
+import { DanceSource } from "../dance/DanceSource.js";
 import * as fx from "./fx/fx-wireframe.js";
 import { createCeremony, CAM_RESET_S } from "./ceremony.js";
 import { createBallActor } from "./ball-actor.js";
@@ -376,7 +377,13 @@ async function boot({ scene, camera, renderer }) {
   const padSource = new GamepadSource({ getVelocityLimits: () => velLims() });
   const touchSource = new TouchSource({ getVelocityLimits: () => velLims() });
   // Keyboard last: it reads zero when idle, so it doubles as the fallback.
-  const controller = new Controller({ sources: [padSource, touchSource, kbSource] });
+  // DuckDance: the video-driven source outranks the human inputs while a
+  // routine plays, and reports itself inactive the rest of the time so
+  // the keyboard and pad behave exactly as they did upstream.
+  const danceSource = new DanceSource();
+  const controller = new Controller({
+    sources: [danceSource, padSource, touchSource, kbSource],
+  });
   // Right-stick camera state, read by the telemetry before the camera-orbit
   // section below has evaluated.
   let padOrbitLive = false;
@@ -1749,6 +1756,70 @@ async function boot({ scene, camera, renderer }) {
     resetSim,
     spawnBall: () => spawnBall(),
     startEntrance: () => ceremony.startEntrance(),
+
+    // ── DuckDance ────────────────────────────────────────────────────
+    // Everything the player needs to drive a routine, and nothing else.
+    // The head slots are written straight into headTarget: buildObs
+    // EMA-smooths them into cmd[3..6] at 50 Hz whether or not HEAD mode
+    // is on, and HEAD mode is deliberately left off because it would
+    // zero the twist and stop the duck walking.
+    dance: {
+      source: danceSource,
+      setTwist: (vx, vy, wz) => danceSource.setCommand(vx, vy, wz),
+      setJaw: (v) => danceSource.setJaw(v),
+      setPlaying: (v) => {
+        danceSource.setPlaying(v);
+        if (!v) headTarget.fill(0);
+      },
+      setHead: (neckPitch, pitch, yaw, roll) => {
+        headTarget[0] = neckPitch;
+        headTarget[1] = pitch;
+        headTarget[2] = yaw;
+        headTarget[3] = roll;
+      },
+      // Fire a one-shot skill. Returns false when the duck was not free
+      // to take it, which the player logs rather than retrying: a missed
+      // move is better than one that lands two beats late.
+      trigger: (type) => {
+        if (inputLocked || recovery) return false;
+        switch (type) {
+          case "kickL": return triggerKick("left", "dance");
+          case "kickR": return triggerKick("right", "dance");
+          case "pick":
+            if (mode !== "walk") return false;
+            triggerGroundPick("dance");
+            return mode === "groundpick";
+          case "roll":
+            if (mode !== "walk") return false;
+            triggerRoll("dance");
+            return mode === "roll" || mode === "crouch";
+          case "sit":
+            if (mode === "sitstand") return false;
+            setMode("sit");
+            return true;
+          case "stand":
+            if (mode !== "sitstand") return false;
+            setMode("walk");
+            return true;
+          default: return false;
+        }
+      },
+      // Whether the duck can take a new command right now. The player
+      // uses this to hold the twist at zero while a skill plays out.
+      get status() {
+        return {
+          mode,
+          sitting: mode === "sitstand" && sitFlag === 1,
+          headMode,
+          inputLocked,
+          recovery: recovery?.state ?? null,
+          loco,
+          busy: mode !== "walk" || postKickLock > 0 || !!recovery ||
+                !!standTimer || !!sitTimer,
+          ready: !inputLocked && !recovery && loco === "legs",
+        };
+      },
+    },
   });
 
   // Deterministic hooks for automated verification (rAF pauses in
@@ -1820,8 +1891,19 @@ async function boot({ scene, camera, renderer }) {
   // ── Multiplayer ghosts (WebRTC, serverless signaling) ────────────────
   // Broadcast this duck's pose and render up to 3 other visitors live as
   // translucent ducks. Fire-and-forget: any failure just means no ghosts.
+  //
+  // DuckDance turns this OFF by default, which is a deliberate departure
+  // from the upstream sandbox. There, the pose being broadcast is
+  // whatever the visitor is doing with the arrow keys. Here it is derived
+  // from a dance video the user chose from their own machine, and the
+  // whole app promises that video never leaves the browser. Streaming the
+  // choreography read off it to strangers over public relays would make
+  // that promise only technically true. Opt back in with ?ghosts=1.
+  const ghostsWanted = new URLSearchParams(location.search).get("ghosts") === "1";
   const r3 = (x) => Math.round(x * 1000) / 1000;
+  if (!ghostsWanted) bootNote("> ghosts off (dance mode) - add ?ghosts=1 to enable");
   try {
+    if (!ghostsWanted) return;
     // Ghosts only join once the entrance has fully played: the world (and
     // this duck) must stay hidden until then, translucent peers included.
     await ceremony.entranceFinished;

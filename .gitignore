@@ -5,3 +5,4 @@ upstream-sim/
 .vite/
 *.log
 .DS_Store
+testdata/

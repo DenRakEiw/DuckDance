@@ -77,7 +77,11 @@ const HINTS = {
   touch: "drag to orbit \u00b7 pinch to zoom",
 };
 
-function closeMenu() {
+// Exported so DuckDance's play button can walk the duck in without
+// asking the user to dismiss the title card first. Closing the menu is
+// what cues the BIOS readout, which in turn cues the entrance, so
+// calling startEntrance directly would skip the sequence.
+export function closeMenu() {
   useGame.setState({ menuOpen: false });
   if (!useGame.getState().entered) useGame.setState({ entered: true });
 }
