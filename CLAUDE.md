@@ -13,6 +13,37 @@ right. Everything runs in the browser, the video never leaves the machine.
 - Working dir: `F:\Duck`, app lives in `F:\Duck\app`
 - The user writes German; replies have been in German.
 
+## Committing
+
+Commits must be authored as
+`DenRakEiw <89697885+DenRakEiw@users.noreply.github.com>`. This is set
+both globally and in `.git/config`, so nothing needs doing by hand — but
+do not "helpfully" fall back to another address if a commit ever refuses
+to run.
+
+The reason is not cosmetic. The user's other address,
+`gupaiacc@gmail.com`, is registered to a **different** GitHub account,
+`imaginegundp`, and GitHub attributes a commit by whichever account owns
+the author email. The first six commits here were pushed that way and all
+showed up under the wrong name. On 2026-09-03 the history was rewritten
+with `git filter-branch --env-filter` and force-pushed; the pre-rewrite
+state is on the local branch `backup/pre-identity-rewrite`.
+
+Check attribution against the API, never the repo sidebar:
+
+```bash
+gh api repos/DenRakEiw/DuckDance/commits --jq '.[] | .author.login'
+gh api repos/DenRakEiw/DuckDance/contributors --jq '.[] | "\(.login) \(.contributions)"'
+```
+
+The Contributors box on the repo page is cached server-side: it was still
+listing `imaginegundp` after the rewrite while the API already read clean,
+and no reload or push clears it. It also counts
+co-authors, which is why `claude` appears there: every commit carries a
+`Co-Authored-By: Claude Opus 5` trailer. Removing that from the list would
+mean another full-history rewrite. The user was asked and has not decided;
+do not strip the trailers unless they say so.
+
 ## Commands
 
 ```bash
